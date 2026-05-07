@@ -108,7 +108,7 @@ class ScrollableFrame(tk.Frame):
         self.canvas = tk.Canvas(self, bg=self.bg_color, highlightthickness=0, borderwidth=0)
         self.scrollbar = tk.Scrollbar(self, orient="vertical", command=self.canvas.yview,
                                        bg="#333333", troughcolor="#1a1a1a",
-                                       activebackground=COLOR_BOTON_ROJO, width=15)
+                                       activebackground=COLOR_BOTON_ROJO, width=20)
         self.scrollable_frame = tk.Frame(self.canvas, bg=self.bg_color,
                                           highlightthickness=0, borderwidth=0)
 
@@ -307,6 +307,7 @@ class RedTeamApp(tk.Tk):
             'deauth': None
         }
         self.evil_twin_stop = False
+        self.deauth_proc = None
 
         self.console_buffer = []
         self.console_pending = False
@@ -645,18 +646,20 @@ class RedTeamApp(tk.Tk):
         ttk.Label(sel_frame, text="Iface: ", style='Dark.TLabel').pack(side='left')
 
         ttk.OptionMenu(sel_frame, self.interfaz_seleccionada, self.interfaz_seleccionada.get(),
-                       *interfaces, style='Dark.TMenubutton').pack(side='left')
-                       
+                    *interfaces, style='Dark.TMenubutton').pack(side='left')
+                    
+        # Generadores de comandos dinámicos (capturan la interfaz en tiempo real)
         botones = [
-            ("Ver Estado", f"sudo macchanger -s {self.interfaz_seleccionada.get()}"),
-            ("MAC Random", f"sudo ifconfig {self.interfaz_seleccionada.get()} down && sudo macchanger -r {self.interfaz_seleccionada.get()} && sudo ifconfig {self.interfaz_seleccionada.get()} up"),
-            ("Reset Original", f"sudo ifconfig {self.interfaz_seleccionada.get()} down && sudo macchanger -p {self.interfaz_seleccionada.get()} && sudo ifconfig {self.interfaz_seleccionada.get()} up"),
-            ("Mismo Fabricante", f"sudo ifconfig {self.interfaz_seleccionada.get()} down && sudo macchanger -a {self.interfaz_seleccionada.get()} && sudo ifconfig {self.interfaz_seleccionada.get()} up")
+            ("Ver Estado",        lambda: f"sudo macchanger -s {self.interfaz_seleccionada.get()}"),
+            ("MAC Random",        lambda: f"sudo ifconfig {self.interfaz_seleccionada.get()} down && sudo macchanger -r {self.interfaz_seleccionada.get()} && sudo ifconfig {self.interfaz_seleccionada.get()} up"),
+            ("Reset Original",    lambda: f"sudo ifconfig {self.interfaz_seleccionada.get()} down && sudo macchanger -p {self.interfaz_seleccionada.get()} && sudo ifconfig {self.interfaz_seleccionada.get()} up"),
+            ("Mismo Fabricante",  lambda: f"sudo ifconfig {self.interfaz_seleccionada.get()} down && sudo macchanger -a {self.interfaz_seleccionada.get()} && sudo ifconfig {self.interfaz_seleccionada.get()} up")
         ]
         
-        for texto, cmd in botones:
-            scroll_mac.add_button(text=texto, command=lambda c=cmd: self.ejecutar_comando(c),
-                                  style='Red.TButton', width=28)
+        for texto, cmd_gen in botones:
+            # Se usa un argumento por defecto para evitar el cierre tardío (late binding)
+            scroll_mac.add_button(text=texto, command=lambda gen=cmd_gen: self.ejecutar_comando(gen()),
+                                style='Red.TButton', width=28)
 
         self.mostrar_consola(parent=scroll_mac.scrollable_frame)
 
@@ -1264,7 +1267,7 @@ if __name__ == "__main__":
         red = self.wifi_state["target"]
         mon = self.wifi_state["mon_iface"]
         subprocess.run(["sudo", "iw", "dev", mon, "set", "channel", red['ch']], stderr=subprocess.DEVNULL,
-                       stdout=subprocess.DEVNULL)
+                    stdout=subprocess.DEVNULL)
         self.limpiar_main_frame()
         self.agregar_boton_atras(self._wifi_deauth)
         ttk.Label(self.main_frame, text="INTENSIDAD", style='Title.TLabel').pack(pady=2)
@@ -1273,11 +1276,55 @@ if __name__ == "__main__":
         scroll.pack(fill='both', expand=True, padx=2, pady=2)
         
         for texto, count in [("Continuo (0)", "0"), ("1 ráfaga (5)", "5"), ("3 ráfagas (15)", "15")]:
+            # Redirigir al nuevo método con gestión del ataque
             scroll.add_button(text=texto, 
-                              command=lambda c=count: self.ejecutar_comando(f"sudo aireplay-ng --deauth {c} -a {red['bssid']} -c {cliente} {mon}"),
-                              style='Red.TButton', width=28)
-                              
+                            command=lambda r=red, c=cliente, cnt=count: self._deauth_ataque_activo(r, c, cnt),
+                            style='Red.TButton', width=28)
+                            
         self.mostrar_consola(parent=scroll.scrollable_frame)
+
+    def _deauth_ataque_activo(self, red, cliente, count):
+        mon = self.wifi_state["mon_iface"]
+        self.limpiar_main_frame()
+        # Botón de regreso a la selección de modo (Broadcast / Cliente)
+        self.agregar_boton_atras(lambda: self._deauth_seleccionar_modo(red))
+        ttk.Label(self.main_frame, text="DEAUTH EN CURSO", style='Title.TLabel').pack(pady=5)
+        
+        scroll = ScrollableFrame(self.main_frame, max_items=10)
+        scroll.pack(fill='both', expand=True, padx=2, pady=2)
+        
+        # Botón para detener el ataque
+        def detener():
+            if self.deauth_proc is not None:
+                try:
+                    self.deauth_proc.terminate()
+                    self.deauth_proc.wait(timeout=5)
+                except:
+                    self.deauth_proc.kill()
+                self.deauth_proc = None
+            self.escribir_consola("[+] Ataque deauth detenido.")
+        
+        scroll.add_button(text="DETENER DEAUTH", command=detener,
+                        style='Danger.TButton', width=28)
+        
+        self.mostrar_consola(parent=scroll.scrollable_frame)
+        
+        # Comando exacto que se ejecutaba antes
+        cmd = ["sudo", "aireplay-ng", "--deauth", count, "-a", red['bssid'], "-c", cliente, mon]
+        self.escribir_consola(f"\nroot@kali:~# {' '.join(cmd)}")
+        
+        def run_attack():
+            # Lanzar ataque en un hilo independiente
+            self.deauth_proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                                stderr=subprocess.STDOUT, text=True)
+            for line in self.deauth_proc.stdout:
+                self.escribir_consola(line.rstrip())
+            self.deauth_proc.wait()
+            self.escribir_consola("\n[+] Ataque finalizado.")
+            self.deauth_proc = None
+        
+        threading.Thread(target=run_attack, daemon=True).start()
+
 
     def _wifi_explorar_handshakes(self):
         self._mostrar_explorador_generico(BASE_DIR_WIFI, "CAPTURAS", self.show_wifi_menu)
