@@ -106,9 +106,11 @@ class ScrollableFrame(tk.Frame):
 
         # Canvas con scrollbar
         self.canvas = tk.Canvas(self, bg=self.bg_color, highlightthickness=0, borderwidth=0)
-        self.scrollbar = tk.Scrollbar(self, orient="vertical", command=self.canvas.yview,
-                                       bg="#333333", troughcolor="#1a1a1a",
-                                       activebackground=COLOR_BOTON_ROJO, width=28)
+        self.scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview,
+                                       style='Dark.Vertical.TScrollbar')
+       
+       
+       
         self.scrollable_frame = tk.Frame(self.canvas, bg=self.bg_color,
                                           highlightthickness=0, borderwidth=0)
 
@@ -295,6 +297,20 @@ class RedTeamApp(tk.Tk):
                 background=[('active', COLOR_BOTON_HOVER)],
                 arrowcolor=[('active', 'white')])
 
+        # --- NUEVO: Estilo para la barra de desplazamiento (Scrollbar) táctil ---
+        style.configure('Dark.Vertical.TScrollbar',
+                        background='#333333',
+                        troughcolor=COLOR_FONDO_PRINCIPAL,
+                        bordercolor=COLOR_FONDO_PRINCIPAL,
+                        arrowcolor='white',
+                        arrowsize=20,  # Aumenta el grosor para mantenerlo "touch-friendly"
+                        relief='flat')
+        style.map('Dark.Vertical.TScrollbar',
+                  background=[('active', COLOR_BOTON_ROJO), ('pressed', COLOR_BOTON_HOVER)],
+                  arrowcolor=[('active', 'white')])
+        
+
+
         style.configure('Red.TButton', background=COLOR_BOTON_ROJO, foreground='white',
                         relief='flat', font=('Helvetica', 10, 'bold'),
                         bordercolor=COLOR_BOTON_ROJO, focuscolor=COLOR_BOTON_ROJO,
@@ -405,16 +421,49 @@ class RedTeamApp(tk.Tk):
         self.back_btn.pack(anchor="nw", padx=2, pady=2)
 
     def mostrar_consola(self, parent=None):
-        """Consola dinámica que se ajusta al contenedor provisto (normalmente el frame scrolleable)."""
+        """Consola dinámica con scrollbar y soporte táctil para la pantalla de 2.4 pulgadas."""
         if parent is None:
             parent = self.main_frame
             
-        self.console_textbox = tk.Text(parent, height=4, bg='#0a0a0a',
+        # Contenedor para alinear la terminal y su barra de scroll
+        self.console_frame = tk.Frame(parent, bg='#0a0a0a')
+        self.console_frame.pack(fill='x', padx=2, pady=2)
+
+        self.console_textbox = tk.Text(self.console_frame, height=4, bg='#0a0a0a',
                                        fg=COLOR_TEXTO_TERMINAL, font=('Courier', 9),
                                        state='disabled', highlightthickness=0,
                                        borderwidth=0, relief='flat')
-        # Empaquetado en el contenedor provisto
-        self.console_textbox.pack(fill='x', padx=2, pady=2)
+                                       
+        # Scrollbar vertical enlazada a la terminal
+        self.console_scrollbar = ttk.Scrollbar(self.console_frame, orient="vertical", 
+                                               command=self.console_textbox.yview,
+                                               style='Dark.Vertical.TScrollbar')
+                                               
+        self.console_textbox.configure(yscrollcommand=self.console_scrollbar.set)
+        
+        # Empaquetado: barra a la derecha, texto llenando el resto
+        self.console_scrollbar.pack(side="right", fill="y")
+        self.console_textbox.pack(side="left", fill="x", expand=True)
+
+        # Eventos táctiles para arrastrar el texto con el dedo
+        self.console_textbox.bind("<Button-1>", self._on_console_touch_start)
+        self.console_textbox.bind("<B1-Motion>", self._on_console_touch_drag)
+
+    def _on_console_touch_start(self, event):
+        """Registra la posición inicial del dedo en la consola."""
+        self._console_drag_start_y = event.y
+
+    def _on_console_touch_drag(self, event):
+        """Calcula el movimiento y desplaza las líneas de la terminal."""
+        # Solo procesamos si el evento y la variable existen
+        if hasattr(self, '_console_drag_start_y'):
+            dy = self._console_drag_start_y - event.y
+            # Sensibilidad del arrastre (si se mueve más de 3 píxeles)
+            if abs(dy) > 3:
+                # Determina la dirección (1 hacia abajo, -1 hacia arriba)
+                fraction = 1 if dy > 0 else -1
+                self.console_textbox.yview_scroll(fraction, "units")
+                self._console_drag_start_y = event.y
 
     def escribir_consola(self, texto):
         self.console_buffer.append(texto)
@@ -425,7 +474,7 @@ class RedTeamApp(tk.Tk):
     def _flush_console(self):
         self.console_pending = False
         self._console_after_id = None
-        if not hasattr(self, 'console_textbox') or not self.console_textbox.winfo_exists():
+        if not hasattr(self, 'console_textbox') or not self.console_textbox.winfo_exists() or not self.console_textbox.winfo_ismapped():
             return
         lines = "\n".join(self.console_buffer) + "\n"
         self.console_buffer.clear()
