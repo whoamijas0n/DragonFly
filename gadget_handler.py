@@ -27,10 +27,35 @@ class BLEGadget:
         if port:
             try:
                 self._ser = serial.Serial(port, baudrate, timeout=timeout)
-                time.sleep(1)
+
+                # ── FIX: Sincronizar con el arranque real del ESP32 ──────────────
+                # El firmware imprime "Gadget listo." al terminar setup().
+                # Leemos hasta recibirla, o salimos si hay >2 s de silencio
+                # (caso en que el ESP32 ya estaba corriendo y no se reinició).
+                self._ser.timeout = 1          # readline no bloqueante durante boot
+                t_last_data = time.time()
+                deadline    = time.time() + 7.0
+                while time.time() < deadline:
+                    try:
+                        line = self._ser.readline().decode(errors='ignore').strip()
+                    except Exception:
+                        break
+                    if line:
+                        t_last_data = time.time()
+                        if "Gadget listo" in line:
+                            break          # ESP32 listo: salir inmediatamente
+                    else:
+                        # Sin datos por >2 s → el ESP32 ya estaba activo, no hubo reset
+                        if time.time() - t_last_data > 2.0:
+                            break
+                self._ser.timeout = timeout    # Restaurar timeout original
+
+                # Ahora vaciamos cualquier byte residual que haya quedado
                 self._ser.reset_input_buffer()
                 self._available = True
                 self._flush_input()
+                # ─────────────────────────────────────────────────────────────────
+
             except serial.SerialException:
                 self._available = False
 
@@ -57,18 +82,28 @@ class BLEGadget:
 
     def _send_command(self, cmd: str):
         if not self.is_available():
-            raise serial.SerialException("Gadget no disponible")
+            raise RuntimeError("Gadget no disponible o desconectado.")
         with self._lock:
-            self._ser.write((cmd + "\n").encode())
-            self._ser.flush()
+            try:
+                self._ser.write((cmd + "\n").encode())
+                self._ser.flush()
+            except (serial.SerialException, OSError) as e:
+                # Si falla la escritura (cable desconectado), cerramos puerto y marcamos no disponible
+                self._available = False
+                if self._ser:
+                    self._ser.close()
+                raise RuntimeError(f"Desconexión abrupta del USB: {e}")
 
     def _read_line(self):
         if not self.is_available():
             return ""
         try:
             line = self._ser.readline().decode(errors='ignore').strip()
-        except:
-            line = ""
+        except (serial.SerialException, OSError):
+            self._available = False
+            if self._ser:
+                self._ser.close()
+            return ""
         return line
 
     def _wait_for_ack(self, expected_prefix, timeout_secs=5):
@@ -145,7 +180,7 @@ class BLEGadget:
     def sweep_jam(self, module: int, duration_sec: int):
         """Activa barrido de frecuencia (0-76) continuo."""
         self._send_command(f"SWEEP_JAM {module} {duration_sec}")
-        self._wait_for_ack("SWEEP_JAMMING_STARTED", 2)
+        self._wait_for_ack("JAMMING_STARTED", 3)
 
     def stop(self, module: int):
         if not self.is_available():
@@ -163,3 +198,16 @@ class BLEGadget:
         self._send_command("STATUS")
         line = self._read_line()
         return line if line else "ERROR: sin respuesta"
+   
+    def close(self):
+        """Cierra limpiamente la conexión serie con el gadget."""
+        self._available = False
+        # Señalar a todos los hilos de escaneo activos que paren
+        for ev in list(self._stop_events.values()):
+            ev.set()
+        if self._ser and self._ser.is_open:
+            try:
+                self._ser.close()
+            except Exception:
+                pass
+        self._ser = None
