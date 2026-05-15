@@ -1674,11 +1674,21 @@ if __name__ == "__main__":
         gc.collect()
 
     # ==========================================
-    # MENÚ BLUETOOTH BLE
+    # MENÚ BLUETOOTH JAMMING
     # ==========================================
-    def _init_gadget(self):
-        if self._gadget_initialized:
+    def _init_gadget(self, force_retry=False):
+        if self._gadget_initialized and not force_retry:
             return
+
+        if self.gadget is not None:
+            try:
+                self.gadget.close()
+            except Exception:
+                pass
+            self.gadget = None
+            self.gadget_available = False
+        # ───────────────────────────────────────────────────────────────────
+
         self._gadget_initialized = True
         try:
             from gadget_handler import BLEGadget
@@ -1705,31 +1715,57 @@ if __name__ == "__main__":
         
         gadget_status = "Conectado" if self.gadget_available else "Desconectado"
         status_color = "#00ff00" if self.gadget_available else "#ff4d4d"
+        
+        # Añadido anchor='center' para arreglar la estética
         ttk.Label(scroll_nrf.scrollable_frame, text=f"Hardware: {gadget_status}",
-                  foreground=status_color, font=('Helvetica', 9)).pack(pady=(2, 10))
+                  foreground=status_color, font=('Helvetica', 9), justify='center').pack(pady=(2, 10), anchor='center')
+                  
         if self.gadget_available:
             scroll_nrf.add_button(text="Activar Jamming", command=self._nrf_start, style='Red.TButton', width=28)
             scroll_nrf.add_button(text="Detener Jamming", command=self._nrf_stop, style='Danger.TButton', width=28)
             scroll_nrf.add_button(text="Consultar Estado", command=self._nrf_status, style='Gray.TButton', width=28)
         else:
             ttk.Label(scroll_nrf.scrollable_frame, text="Conecta el ESP32 por USB.", style='Dark.TLabel').pack(pady=5)
-            scroll_nrf.add_button(text="Reintentar Conexión", command=self.show_nrf_jammer_menu, style='Gray.TButton', width=28)
+            # Aquí cambiamos a una función lambda que llama a una nueva función de reintento
+            scroll_nrf.add_button(text="Reintentar Conexión", command=self._retry_gadget_connection, style='Gray.TButton', width=28)
+            
         self.mostrar_consola(parent=scroll_nrf.scrollable_frame)
         gc.collect()
 
+    def _retry_gadget_connection(self):
+        self.escribir_consola("[*] Escaneando puertos USB...")
+        self._init_gadget(force_retry=True)
+        self.show_nrf_jammer_menu() # Refresca el menú con el nuevo estado
+
+    # Ahora agregamos bloques try/except a las llamadas para evitar que Tkinter crashee
     def _nrf_start(self):
         if self.gadget_available:
             self.escribir_consola("[*] Iniciando ataque RF (Barrido continuo)...")
-            self.gadget.sweep_jam(0, 0) # 0 duración = infinito hasta recibir stop
+            try:
+                self.gadget.sweep_jam(0, 0)
+            except Exception as e:
+                self.escribir_consola(f"[!] Falla de hardware: {e}")
+                self.gadget_available = False
+                self.show_nrf_jammer_menu() # Refresca la UI a "Desconectado"
 
     def _nrf_stop(self):
         if self.gadget_available:
             self.escribir_consola("[*] Deteniendo transmisiones...")
-            self.gadget.stop(0)
+            try:
+                self.gadget.stop(0)
+            except Exception as e:
+                self.escribir_consola(f"[!] Falla de hardware: {e}")
+                self.gadget_available = False
+                self.show_nrf_jammer_menu()
 
     def _nrf_status(self):
         if self.gadget_available:
-            self.escribir_consola(f"[+] Estado: {self.gadget.status()}")
+            try:
+                self.escribir_consola(f"[+] Estado: {self.gadget.status()}")
+            except Exception as e:
+                self.escribir_consola(f"[!] Falla de hardware: {e}")
+                self.gadget_available = False
+                self.show_nrf_jammer_menu()
 
     # ==========================================
     # MENÚ RUBBER DUCKY 
