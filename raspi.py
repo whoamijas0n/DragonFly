@@ -1676,21 +1676,31 @@ if __name__ == "__main__":
     # ==========================================
     # MENÚ BLUETOOTH BLE
     # ==========================================
+    def _ensure_gadget(self, force_reconnect=False):
+        """Verifica o restablece la conexión usando reconexión forzada si es necesario."""
+        if force_reconnect and self.gadget is not None:
+            self.gadget.reconnect()
+            self.gadget_available = self.gadget.is_available()
+            return self.gadget_available
 
-    def _ensure_gadget(self):
-        """Verifica o restablece la conexión. Devuelve True si está listo."""
         if self.gadget is not None and self.gadget.is_available():
             return True
+            
         try:
             from gadget_handler import BLEGadget
-            self.gadget = BLEGadget()
+            if self.gadget is None:
+                self.gadget = BLEGadget()
+            else:
+                self.gadget.reconnect()
+                
             self.gadget_available = self.gadget.is_available()
             if self.gadget_available:
-                self.escribir_consola("[+] Gadget NRF24 conectado y listo.")
+                self.escribir_consola("[+] Gadget NRF24 conectado.")
         except Exception as e:
             self.gadget = None
             self.gadget_available = False
             self.escribir_consola(f"[!] Error inicializando gadget: {e}")
+            
         return self.gadget_available
 
     def show_nrf_jammer_menu(self):
@@ -1698,11 +1708,9 @@ if __name__ == "__main__":
         self.agregar_boton_atras(self.show_inicio_menu)
         ttk.Label(self.main_frame, text="NRF24 JAMMER", style='Title.TLabel').pack(pady=2)
         
-        # Indicador de carga inicial
         loading_lbl = ttk.Label(self.main_frame, text="Detectando puerto USB...", style='Gray.TLabel')
         loading_lbl.pack(pady=20)
 
-        # Verificación asíncrona: evita que la UI se congele durante el handshake
         def async_check():
             connected = self._ensure_gadget()
             self.after(0, lambda: self._build_nrf_interface(connected, loading_lbl))
@@ -1710,7 +1718,6 @@ if __name__ == "__main__":
         threading.Thread(target=async_check, daemon=True).start()
 
     def _build_nrf_interface(self, connected, loading_lbl=None):
-        # FIX CRÍTICO: Verificar si loading_lbl existe y es válido antes de destruirlo
         if loading_lbl is not None and loading_lbl.winfo_exists():
             loading_lbl.destroy()
 
@@ -1730,46 +1737,61 @@ if __name__ == "__main__":
             scroll_nrf.add_button(text="Activar Jamming", command=self._nrf_start, style='Red.TButton', width=28)
             scroll_nrf.add_button(text="Detener Jamming", command=self._nrf_stop, style='Danger.TButton', width=28)
             scroll_nrf.add_button(text="Consultar Estado", command=self._nrf_status, style='Gray.TButton', width=28)
-            scroll_nrf.add_button(text="Reconectar", command=self._async_reconnect, style='Gray.TButton', width=28)
+            scroll_nrf.add_button(text="Reconectar / Reset", command=self._async_reconnect, style='Gray.TButton', width=28)
         else:
             ttk.Label(scroll_nrf.scrollable_frame, text="Conecta el ESP32 por USB.", style='Dark.TLabel').pack(pady=5)
-            scroll_nrf.add_button(text="Buscar/Reconectar", command=self._async_reconnect, style='Gray.TButton', width=28)
+            scroll_nrf.add_button(text="Buscar Dispositivo", command=self._async_reconnect, style='Red.TButton', width=28)
 
         self.mostrar_consola(parent=scroll_nrf.scrollable_frame)
         gc.collect()
 
     def _async_reconnect(self):
-        """Maneja la reconexión en segundo plano para evitar congelar la pantalla táctil."""
-        self.escribir_consola("[*] Intentando reconectar gadget...")
+        """Maneja la reconexión forzando la limpieza del puerto serial previo."""
+        self.escribir_consola("[*] Buscando dispositivo...")
         def do_reconnect():
-            connected = self._ensure_gadget()
-            # Vuelve al hilo principal para reconstruir la UI
+            connected = self._ensure_gadget(force_reconnect=True)
+            if not connected:
+                self.escribir_consola("[!] No se detectó el hardware.")
             self.after(0, lambda: self._build_nrf_interface(connected, None))
+            
         threading.Thread(target=do_reconnect, daemon=True).start()
 
     def _nrf_start(self):
         if self.gadget and self.gadget.is_available():
             self.escribir_consola("[*] Iniciando barrido RF continuo...")
-            # Ejecutar en hilo para no bloquear UI esperando ACK
-            threading.Thread(target=lambda: self.gadget.sweep_jam(0, 0), daemon=True).start()
+            def run():
+                try:
+                    self.gadget.sweep_jam(0, 0)
+                except Exception as e:
+                    self.after(0, lambda: self.escribir_consola(f"[!] Error: {e}"))
+            threading.Thread(target=run, daemon=True).start()
         else:
-            self.escribir_consola("[!] Gadget desconectado. Usa 'Reconectar'.")
+            self.escribir_consola("[!] Gadget desconectado. Pulsa 'Buscar'.")
 
     def _nrf_stop(self):
         if self.gadget and self.gadget.is_available():
             self.escribir_consola("[*] Deteniendo transmisiones...")
-            threading.Thread(target=lambda: self.gadget.stop(0), daemon=True).start()
+            def run():
+                try:
+                    self.gadget.stop(0)
+                except Exception as e:
+                    self.after(0, lambda: self.escribir_consola(f"[!] Error: {e}"))
+            threading.Thread(target=run, daemon=True).start()
         else:
             self.escribir_consola("[!] Gadget desconectado.")
 
     def _nrf_status(self):
         if self.gadget and self.gadget.is_available():
             def _fetch():
-                st = self.gadget.status()
-                self.after(0, lambda: self.escribir_consola(f"[+] Estado ESP32: {st}"))
+                try:
+                    st = self.gadget.status()
+                    self.after(0, lambda: self.escribir_consola(f"[+] Estado ESP32: {st}"))
+                except Exception as e:
+                    self.after(0, lambda: self.escribir_consola(f"[!] Error: {e}"))
             threading.Thread(target=_fetch, daemon=True).start()
         else:
             self.escribir_consola("[!] Gadget desconectado.")
+    
     # ==========================================
     # MENÚ RUBBER DUCKY 
     # ==========================================
@@ -1864,6 +1886,7 @@ WantedBy=sysinit.target
         self.escribir_consola("[+] Aplicado. Apagando en 3 segundos...")
         self.after(3000, lambda: subprocess.run("sudo poweroff", shell=True))
 
+
     # ==========================================
     # MENÚ UTILIDADES 
     # ==========================================
@@ -1880,9 +1903,11 @@ WantedBy=sysinit.target
             ("Activar Perfil: ANTENA WIFI", lambda: self._cambiar_modo_usb("host")),
             ("Activar Perfil: RUBBER DUCKY", lambda: self._cambiar_modo_usb("gadget")),
             ("Conectar a Red WiFi", self._utils_wifi_seleccionar_interfaz),
+            ("Redes WiFi Guardadas", self._utils_wifi_redes_guardadas), # NUEVA OPCIÓN
             ("Estado de Red WiFi", self._utils_wifi_estado),
             ("Conectar Dispositivo BT", self._utils_bluetooth_seleccionar_interfaz),
-            ("Estado de Adaptador BT", self._utils_bluetooth_estado)
+            ("Estado de Adaptador BT", self._utils_bluetooth_estado),
+            ("Actualizar Sistema (APT)", self._utils_actualizar_sistema) # NUEVA OPCIÓN
         ]
         for texto, cmd in opciones:
             scroll_utils.add_button(text=texto, command=cmd, style='Red.TButton', width=28)
@@ -1902,16 +1927,58 @@ WantedBy=sysinit.target
 
         sys_opts = ttk.Frame(scroll_utils.scrollable_frame, style='Dark.TFrame')
         sys_opts.pack(fill='x', padx=5, pady=5)
-        sys_opts.grid_columnconfigure((0, 1), weight=1)
+        # Modificado para soportar 3 columnas (0, 1, 2)
+        sys_opts.grid_columnconfigure((0, 1, 2), weight=1)
+        
         ttk.Button(sys_opts, text="REINICIAR", style='Danger.TButton',
-                   command=lambda: subprocess.run("reboot", shell=True)).grid(row=0, column=0, padx=2,
-                                                                              sticky="ew")
+                   command=lambda: subprocess.run("reboot", shell=True)).grid(row=0, column=0, padx=2, sticky="ew")
         ttk.Button(sys_opts, text="APAGAR", style='Danger.TButton',
-                   command=lambda: subprocess.run("shutdown -h now", shell=True)).grid(row=0, column=1, padx=2,
-                                                                                        sticky="ew")
+                   command=lambda: subprocess.run("shutdown -h now", shell=True)).grid(row=0, column=1, padx=2, sticky="ew")
+        # NUEVO BOTÓN PARA SALIR DE LA INTERFAZ
+        ttk.Button(sys_opts, text="SALIR", style='Danger.TButton',
+                   command=self.destroy).grid(row=0, column=2, padx=2, sticky="ew")
                                                                                         
         self.mostrar_consola(parent=scroll_utils.scrollable_frame)
         gc.collect()
+        
+    # -------------------- NUEVAS FUNCIONES DE SISTEMA Y RED --------------------
+
+    def _utils_wifi_redes_guardadas(self):
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(self.show_utils_menu)
+        ttk.Label(self.main_frame, text="REDES GUARDADAS", style='Title.TLabel').pack(pady=2)
+
+        scroll = ScrollableFrame(self.main_frame, max_items=50)
+        scroll.pack(fill='both', expand=True, padx=2, pady=2)
+
+        try:
+            # Filtramos solo las conexiones WiFi guardadas en NetworkManager
+            output = subprocess.check_output("nmcli -t -f NAME,TYPE connection show | grep 802-11-wireless", shell=True, text=True)
+            redes = [line.split(':')[0] for line in output.splitlines() if line]
+
+            if not redes:
+                ttk.Label(scroll.scrollable_frame, text="No hay redes guardadas.", style='Dark.TLabel').pack(pady=10)
+            else:
+                for red in redes:
+                    scroll.add_button(text=red, command=lambda r=red: self._utils_wifi_conectar_guardada(r),
+                                      style='Gray.TButton', width=28)
+        except Exception as e:
+            ttk.Label(scroll.scrollable_frame, text=f"Error leyendo redes.", style='Dark.TLabel').pack()
+
+        self.mostrar_consola(parent=scroll.scrollable_frame)
+        gc.collect()
+
+    def _utils_wifi_conectar_guardada(self, ssid):
+        self.escribir_consola(f"[*] Conectando a red guardada: {ssid}...")
+        # Usamos nmcli connection up en lugar de device wifi connect porque ya tiene la contraseña guardada
+        self.ejecutar_comando(f"nmcli connection up '{ssid}'", use_shell=True)
+
+    def _utils_actualizar_sistema(self):
+        self.escribir_consola("[*] Iniciando actualización de repositorios...")
+        self.escribir_consola("[!] Esto puede tardar varios minutos en la Pi Zero 2.")
+        # Encadenamos update y upgrade. La bandera -y evita que apt pregunte [Y/n] y se quede trabado
+        comando_update = "sudo apt update && sudo DEBIAN_FRONTEND=noninteractive apt upgrade -y"
+        self.ejecutar_comando(comando_update, callback_after=lambda: self.escribir_consola("[+] Actualización completada."), use_shell=True)
 
     # -------------------- UTILIDADES WiFi --------------------
     def obtener_interfaces_wifi(self):
