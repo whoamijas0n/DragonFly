@@ -51,7 +51,9 @@ DragonFly ha sido desarrollado exclusivamente con fines educativos y para la rea
 
 ---
 
+<div aling="center">
 ## Edición Raspberry Pi (raspi.py)
+</div>
 
 ### Descripción Técnica
 
@@ -240,9 +242,11 @@ Cambiar entre ambos modos requiere modificar la configuración del kernel y reca
 
 ---
 
+<div aling="center">
 ## Edición de Escritorio — `desktop.py`
+</div>
 
-### Descripción
+### Descripción Técnica
 
 La edición de escritorio está adaptada para laptops o placas Raspberry Pi más potentes (Pi 4, Pi 5) que ejecuten Kali Linux con entorno gráfico. La GUI utiliza `customtkinter` en lugar del `tkinter` nativo, proporcionando widgets modernos con bordes redondeados y una estética dark más refinada. La ventana arranca en modo pantalla completa con topmost activo, presentando un sidebar fijo con los módulos de navegación en la columna izquierda y un panel de contenido scrollable en la columna derecha.
 
