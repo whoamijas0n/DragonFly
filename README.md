@@ -82,7 +82,7 @@ El entorno de ejecución recomendado es el siguiente:
 
 <img src="images/raspi-zero.png" alt="raspi-zero" width="800" height="auto" />
 
-
+</div>
 ---
 
 ### Desglose de Herramientas
