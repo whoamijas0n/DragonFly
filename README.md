@@ -65,7 +65,7 @@ Esta variante está optimizada para ejecución en hardware de recursos limitados
 
 El entorno de ejecución recomendado es el siguiente:
 
-<div align="center">
+
 
 
 
@@ -77,7 +77,7 @@ El entorno de ejecución recomendado es el siguiente:
 | Sistema Operativo | Raspberry Pi OS 32-bits con entorno gráfico (Legacy o Bookworm Desktop) |
 
 
-</div>
+
 
 > Los siguientes enlaces son referencias de ejemplo para orientar la compra del hardware. Los precios y la disponibilidad pueden variar.
 >
@@ -93,7 +93,6 @@ El entorno de ejecución recomendado es el siguiente:
 
 Módulo de escaneo de red basado en `nmap`. El operador introduce una IP objetivo mediante un teclado numérico táctil emergente y opcionalmente activa un modo de rango CIDR (`/8`, `/16`, `/24`, `/32`). Los comandos disponibles cubren los flujos de reconocimiento más comunes en un pentest:
 
-<div align="center">
 
 
 | Opción | Descripción |
@@ -113,7 +112,6 @@ Módulo de escaneo de red basado en `nmap`. El operador introduce una IP objetiv
 | Automatizado | Pipeline completo: descubrimiento, puertos y servicios en secuencia |
 
 
-</div>
 
 Cada escaneo crea automáticamente una carpeta de sesión con la marca temporal dentro de `Resultados_Nmap/Auditoria-YYYY-MM-DD-HH-MM-SS/` y guarda la salida en archivos `.txt` numerados. El botón "Ver Resultados" permite navegar y leer estos archivos directamente desde la interfaz táctil.
 
@@ -161,7 +159,6 @@ Conjunto de herramientas de soporte operacional:
 
 El script crea y mantiene tres directorios raíz en la misma ubicación desde donde se ejecuta:
 
-<div align="center">
 
 | Directorio | Contenido |
 |---|---|
@@ -169,7 +166,6 @@ El script crea y mantiene tres directorios raíz en la misma ubicación desde do
 | `Resultados_Handshake/` | Capturas `.cap` de handshakes WPA/WPA2 |
 | `Resultados_EvilTwin/` | Archivos `credentials.log` con datos capturados por el portal |
 
-</div>
 
 Cada sesión genera su propia subcarpeta con nombre `Auditoria-{YYYY-MM-DD-HH-MM-SS}`, garantizando que múltiples ejecuciones no sobreescriban datos anteriores.
 
@@ -215,7 +211,6 @@ Los scripts de inyección se almacenan como archivos `.txt` dentro de la carpeta
 
 #### Sintaxis básica soportada
 
-<div align="center">
 
 | Comando | Argumento | Descripción |
 |---|---|---|
@@ -234,7 +229,6 @@ Los scripts de inyección se almacenan como archivos `.txt` dentro de la carpeta
 | `DELETE` | — | Suprimir |
 | `REM` | comentario | Línea ignorada (comentario) |
 
-</div>
 
 Los caracteres en mayúscula son tratados automáticamente como `Shift + minúscula`. Los caracteres especiales que requieren Shift en distribución US (`:`  `?`  `_`  `+`  `"`  `>`  `<`  `|`  `{`  `}` `~`) están mapeados correctamente. Las combinaciones de dos teclas se escriben en la misma línea separadas por espacio (`GUI r`, `CTRL ALT t`).
 
@@ -277,7 +271,6 @@ La edición de escritorio está adaptada para laptops o placas Raspberry Pi más
 
 ### Diferencias respecto a la edición Raspberry Pi
 
-<div align="center">
 
 | Característica | Edición Raspi | Edición Desktop |
 |---|---|---|
@@ -289,7 +282,6 @@ La edición de escritorio está adaptada para laptops o placas Raspberry Pi más
 | Rubber Ducky | Requiere USB Gadget HID activo | Requiere adaptador USB HID externo compatible |
 | Integración BLE Gadget | Via USB serie | Via USB serie (mismo módulo `gadget_handler.py`) |
 
-</div>
 
 Las funcionalidades de Reconocimiento Nmap, MAC Changer, Auditoría WiFi, Evil Twin, Rubber Ducky y Gadget BLE operan de forma idéntica en cuanto a lógica y comandos subyacentes. La diferencia está en la interacción: en la edición desktop el operador usa la navegación estándar de ventanas, atajos de teclado y el ratón, sin los teclados emergentes táctiles ni la lógica de scroll por gestos.
 
@@ -316,7 +308,6 @@ El script requiere privilegios de root. Si se ejecuta con `sudo`, detecta autom�
 
 ### Opciones del menú de instalación
 
-<div align="center">
 
 | Opción | Descripción |
 |---|---|
@@ -326,7 +317,6 @@ El script requiere privilegios de root. Si se ejecuta con `sudo`, detecta autom�
 | 4) Solo Auto-Inicio | Crea la entrada `.desktop` de autostart y regla sudoers |
 | 5) Salir | Termina sin realizar cambios |
 
-</div>
 
 ---
 
@@ -408,7 +398,6 @@ El módulo `gadget_handler.py` gestiona la conexión serie con reconexión autom
 
 ### Pinout Físico — Blue-Fly
 
-<div align="center">
 
 
 ### HSPI
@@ -456,7 +445,6 @@ El módulo `gadget_handler.py` gestiona la conexión serie con reconexión autom
 |          SCL           |GPIO 5 |
 |          SDA           |GPIO 4 |
 
-</div>
 
 ---
 
