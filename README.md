@@ -335,6 +335,12 @@ La carpeta `gadgets/` contiene el firmware para extender las capacidades física
 
 Blue-Fly es un gadget de interferencia y análisis de radiofrecuencia en la banda de 2.4 GHz, construido sobre un ESP32 con dos módulos nRF24L01 conectados a los buses VSPI y HSPI del microcontrolador. El firmware aprovecha la arquitectura dual-core del ESP32 para maximizar la cobertura espectral: Core 0 gestiona el módulo VSPI (comenzando en el canal 45) y Core 1 gestiona el módulo HSPI (comenzando en el canal 60) de forma completamente paralela e independiente.
 
+<div align="center">
+
+<img src="images/blue-fly.jpeg" alt="logo" width="800" height="auto" />
+
+</div>
+
 #### Capacidades
 
 - **Jammer de 2.4 GHz (Sweep Jam)**: los dos módulos nRF24L01 recorren los 84 canales de la banda de 2.4 GHz a máxima potencia (`RF24_PA_MAX`), tasa de datos de 2 Mbps y sin CRC, transmitiendo payloads de ruido de 5 bytes. La saturación simultánea desde dos módulos en canales complementarios maximiza la densidad de interferencia, afectando comunicaciones Wi-Fi, Bluetooth y Zigbee que operen en la misma banda.
