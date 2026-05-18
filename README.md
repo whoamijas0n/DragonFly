@@ -330,13 +330,6 @@ La carpeta `gadgets/` contiene el firmware para extender las capacidades física
 
 ### Blue-Fly
 
-
-<div align="center">
-
-<img src="images/blue-fly.jpeg" alt="logo" width="600" height="auto" />
-
-</div>
-
 **Archivo de firmware:** `BlueFly_Firmware.ino`
 **Gestor de software:** `gadget_handler.py`
 
@@ -351,6 +344,13 @@ Blue-Fly es un gadget de interferencia y análisis de radiofrecuencia en la band
 - **Protocolo serie**: la comunicación con el software anfitrión se realiza a 115200 baudios. Los comandos soportados son `SWEEP_JAM`, `STOP` y `STATUS`. El firmware responde con `JAMMING_STARTED`, `STOPPED`, `JAMMING_ACTIVE` o `JAMMING_INACTIVE` según corresponda.
 
 El módulo `gadget_handler.py` gestiona la conexión serie con reconexión automática y hot-plugging. Al iniciar, espera la cadena `Gadget listo` que el firmware emite en `setup()`. Si el dispositivo se desconecta físicamente durante la sesión, el gestor detecta la ausencia del archivo de dispositivo en `/dev/` y limpia el estado de forma segura, permitiendo una reconexión posterior sin reiniciar la aplicación.
+
+
+<div align="center">
+
+<img src="images/blue-fly.jpeg" alt="logo" width="600" height="auto" />
+
+</div>
 
 ---
 
