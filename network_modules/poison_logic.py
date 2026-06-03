@@ -89,9 +89,9 @@ class PoisonAttack:
             time.sleep(2)
 
             # Desactivar IPv6 para evitar esperas de SLAAC
-            #os.system(f"sudo sysctl -w net.ipv6.conf.{iface}.disable_ipv6=1 2>/dev/null")
-            #os.system(f"sudo sysctl -w net.ipv6.conf.{iface}.accept_ra=0 2>/dev/null")
-            #os.system(f"sudo sysctl -w net.ipv6.conf.{iface}.autoconf=0 2>/dev/null")
+            os.system(f"sudo sysctl -w net.ipv6.conf.{iface}.disable_ipv6=1 2>/dev/null")
+            os.system(f"sudo sysctl -w net.ipv6.conf.{iface}.accept_ra=0 2>/dev/null")
+            os.system(f"sudo sysctl -w net.ipv6.conf.{iface}.autoconf=0 2>/dev/null")
 
             ip = "192.168.10.1"
             subnet_mask = "24"
@@ -179,6 +179,12 @@ class PoisonAttack:
                 text=True,
                 bufsize=1
             )
+            
+            os.system(f"sudo ip link set {iface} down 2>/dev/null")
+            time.sleep(0.5)
+            os.system(f"sudo ip link set {iface} up")
+            # ------------------------------------------
+
 
             while not self.stop_event.is_set():
                 linea = self.proc_responder.stdout.readline()
