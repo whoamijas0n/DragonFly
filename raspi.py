@@ -2166,17 +2166,17 @@ if __name__ == "__main__":
         if not os.path.exists(service_path):
             self.escribir_consola("[*] Creando servicio systemd para el gadget...")
             servicio_systemd = """[Unit]
-Description=USB HID/Net Gadget Initialization
-After=systemd-modules-load.service
+    Description=USB HID/Net Gadget Initialization
+    After=systemd-modules-load.service
 
-[Service]
-Type=oneshot
-ExecStart=/bin/bash /usr/local/bin/usb_gadget.sh
-RemainAfterExit=yes
+    [Service]
+    Type=oneshot
+    ExecStart=/bin/bash /usr/local/bin/usb_gadget.sh
+    RemainAfterExit=yes
 
-[Install]
-WantedBy=sysinit.target
-"""
+    [Install]
+    WantedBy=sysinit.target
+    """
             subprocess.run(f"sudo sh -c 'echo \"{servicio_systemd}\" > {service_path}'", shell=True)
             subprocess.run("sudo systemctl daemon-reload", shell=True)
 
@@ -2190,39 +2190,48 @@ WantedBy=sysinit.target
         else:
             subprocess.run(f"sudo sh -c 'echo \"dtoverlay=dwc2,dr_mode=peripheral\" >> {cfg}'", shell=True)
             subprocess.run("sudo systemctl enable usb_gadget.service", shell=True, stderr=subprocess.DEVNULL)
-            
+
             # --- GENERADOR DINÁMICO DE LIBCOMPOSITE ---
-            # Este script borra la configuración previa en memoria RAM (configfs) y monta la nueva
             sh_script = f"""#!/bin/bash
-modprobe libcomposite
-cd /sys/kernel/config/usb_gadget/
+    modprobe libcomposite
+    cd /sys/kernel/config/usb_gadget/
 
-# LIMPIEZA TOTAL DE GADGETS PREVIOS
-if [ -d dragonfly ]; then
-  echo "" > dragonfly/UDC
-  rm -f dragonfly/configs/c.1/hid.usb0
-  rm -f dragonfly/configs/c.1/rndis.usb0
-  rm -f dragonfly/configs/c.1/ecm.usb0
-  rm -f dragonfly/os_desc/c.1
-  rmdir dragonfly/configs/c.1/strings/0x409
-  rmdir dragonfly/configs/c.1
-  rmdir dragonfly/functions/hid.usb0 2>/dev/null
-  rmdir dragonfly/functions/rndis.usb0 2>/dev/null
-  rmdir dragonfly/functions/ecm.usb0 2>/dev/null
-  rmdir dragonfly/strings/0x409
-  rmdir dragonfly
-fi
+    # LIMPIEZA TOTAL DE GADGETS PREVIOS (incluye sesiones anteriores)
+    for dir in /sys/kernel/config/usb_gadget/*; do
+        if [ -d "$dir" ]; then
+            echo "" > "$dir/UDC" 2>/dev/null
+            sleep 0.2
+            rm -rf "$dir" 2>/dev/null
+        fi
+    done
+    # Ahora sí, limpiar 'dragonfly' si todavía existe
+    if [ -d dragonfly ]; then
+        echo "" > dragonfly/UDC 2>/dev/null
+        sleep 0.2
+        rm -rf dragonfly 2>/dev/null
+    fi
 
-mkdir -p dragonfly
-cd dragonfly
-echo 0x1d6b > idVendor
-echo 0x0104 > idProduct
-echo 0x0100 > bcdDevice
-echo 0x0200 > bcdUSB
-mkdir -p strings/0x409
-echo "fedcba9876543210" > strings/0x409/serialnumber
-echo "DragonFly" > strings/0x409/manufacturer
-"""
+    mkdir -p dragonfly
+    cd dragonfly
+    # Identificadores según el perfil
+    """
+            # Identificadores USB correctos para cada modo
+            if modo == "rndis":
+                sh_script += "echo 0x0525 > idVendor\n"
+                sh_script += "echo 0xa4a2 > idProduct\n"
+            elif modo == "ecm":
+                sh_script += "echo 0x0525 > idVendor\n"
+                sh_script += "echo 0xa4a1 > idProduct\n"
+            else:  # gadget (Rubber Ducky)
+                sh_script += "echo 0x1d6b > idVendor\n"
+                sh_script += "echo 0x0104 > idProduct\n"
+
+            sh_script += """echo 0x0100 > bcdDevice
+    echo 0x0200 > bcdUSB
+    mkdir -p strings/0x409
+    echo "fedcba9876543210" > strings/0x409/serialnumber
+    echo "DragonFly" > strings/0x409/manufacturer
+    """
             # Nombres según el ataque
             if modo == "gadget":
                 sh_script += "echo \"DragonFly HID (Keyboard)\" > strings/0x409/product\n"
@@ -2232,47 +2241,48 @@ echo "DragonFly" > strings/0x409/manufacturer
                 sh_script += "echo \"DragonFly CDC ECM Ethernet\" > strings/0x409/product\n"
 
             sh_script += """
-mkdir -p configs/c.1/strings/0x409
-echo "Config 1" > configs/c.1/strings/0x409/configuration
-echo 250 > configs/c.1/MaxPower
-"""
+    mkdir -p configs/c.1/strings/0x409
+    echo "Config 1" > configs/c.1/strings/0x409/configuration
+    echo 250 > configs/c.1/MaxPower
+    """
             # Lógica para DUCKY (Teclado)
             if modo == "gadget":
                 sh_script += """
-mkdir -p functions/hid.usb0
-echo 1 > functions/hid.usb0/protocol
-echo 1 > functions/hid.usb0/subclass
-echo 8 > functions/hid.usb0/report_length
-echo -ne \\\\x05\\\\x01\\\\x09\\\\x06\\\\xa1\\\\x01\\\\x05\\\\x07\\\\x19\\\\xe0\\\\x29\\\\xe7\\\\x15\\\\x00\\\\x25\\\\x01\\\\x75\\\\x01\\\\x95\\\\x08\\\\x81\\\\x02\\\\x95\\\\x01\\\\x75\\\\x08\\\\x81\\\\x03\\\\x95\\\\x05\\\\x75\\\\x01\\\\x05\\\\x08\\\\x19\\\\x01\\\\x29\\\\x05\\\\x91\\\\x02\\\\x95\\\\x01\\\\x75\\\\x03\\\\x91\\\\x03\\\\x95\\\\x06\\\\x75\\\\x08\\\\x15\\\\x00\\\\x25\\\\x65\\\\x05\\\\x07\\\\x19\\\\x00\\\\x29\\\\x65\\\\x81\\\\x00\\\\xc0 > functions/hid.usb0/report_desc
-ln -s functions/hid.usb0 configs/c.1/
-"""
+    mkdir -p functions/hid.usb0
+    echo 1 > functions/hid.usb0/protocol
+    echo 1 > functions/hid.usb0/subclass
+    echo 8 > functions/hid.usb0/report_length
+    echo -ne \\\\x05\\\\x01\\\\x09\\\\x06\\\\xa1\\\\x01\\\\x05\\\\x07\\\\x19\\\\xe0\\\\x29\\\\xe7\\\\x15\\\\x00\\\\x25\\\\x01\\\\x75\\\\x01\\\\x95\\\\x08\\\\x81\\\\x02\\\\x95\\\\x01\\\\x75\\\\x08\\\\x81\\\\x03\\\\x95\\\\x05\\\\x75\\\\x01\\\\x05\\\\x08\\\\x19\\\\x01\\\\x29\\\\x05\\\\x91\\\\x02\\\\x95\\\\x01\\\\x75\\\\x03\\\\x91\\\\x03\\\\x95\\\\x06\\\\x75\\\\x08\\\\x15\\\\x00\\\\x25\\\\x65\\\\x05\\\\x07\\\\x19\\\\x00\\\\x29\\\\x65\\\\x81\\\\x00\\\\xc0 > functions/hid.usb0/report_desc
+    ln -s functions/hid.usb0 configs/c.1/
+    """
             # Lógica para RNDIS (Windows)
             elif modo == "rndis":
                 sh_script += """
-mkdir -p functions/rndis.usb0
-echo 1 > os_desc/use
-echo 0xcd > os_desc/b_vendor_code
-echo MSFT100 > os_desc/qw_sign
-mkdir -p functions/rndis.usb0/os_desc/interface.rndis
-echo RNDIS > functions/rndis.usb0/os_desc/interface.rndis/compatible_id
-echo 5162001 > functions/rndis.usb0/os_desc/interface.rndis/sub_compatible_id
-ln -s functions/rndis.usb0 configs/c.1/
-ln -s configs/c.1 os_desc
-"""
+    mkdir -p functions/rndis.usb0
+    echo 1 > os_desc/use
+    echo 0xcd > os_desc/b_vendor_code
+    echo MSFT100 > os_desc/qw_sign
+    mkdir -p functions/rndis.usb0/os_desc/interface.rndis
+    echo RNDIS > functions/rndis.usb0/os_desc/interface.rndis/compatible_id
+    echo 5162001 > functions/rndis.usb0/os_desc/interface.rndis/sub_compatible_id
+    ln -s functions/rndis.usb0 configs/c.1/
+    ln -s configs/c.1 os_desc
+    """
             # Lógica para ECM (Mac/Linux)
             elif modo == "ecm":
                 sh_script += """
-mkdir -p functions/ecm.usb0
-ln -s functions/ecm.usb0 configs/c.1/
-"""
+    mkdir -p functions/ecm.usb0
+    ln -s functions/ecm.usb0 configs/c.1/
+    """
 
-            # Comando final para encender el USB
+            # Comando final para encender el USB con retardo
             sh_script += "ls /sys/class/udc > UDC\n"
+            sh_script += "sleep 2\n"
 
             # Guardar y aplicar
             with open("/tmp/usb_gadget.sh", "w") as f:
                 f.write(sh_script)
-            
+
             subprocess.run(f"sudo mv /tmp/usb_gadget.sh {gadget_script}", shell=True)
             subprocess.run(f"sudo chmod +x {gadget_script}", shell=True)
             self.escribir_consola(f"[*] Perfil generado y limpiado. (Modo: {modo.upper()})")
