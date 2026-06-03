@@ -212,8 +212,8 @@ class PoisonAttack:
         # Restaurar servicios detenidos
         os.system("sudo systemctl start systemd-resolved 2>/dev/null")
         os.system("sudo systemctl start systemd-networkd 2>/dev/null")
-        if os.path.exists("dnsmasq_temp.conf"):
-            os.remove("dnsmasq_temp.conf")
+        if os.path.exists("/tmp/dnsmasq_poison.conf"): 
+            os.remove("/tmp/dnsmasq_poison.conf")
 
         if self.session_dir:
             self.log(f"[*] Organizando evidencia en: {os.path.basename(self.session_dir)}")
