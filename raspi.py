@@ -2275,23 +2275,6 @@ if __name__ == "__main__":
     ln -s functions/ecm.usb0 configs/c.1/
     """
 
-            # ===== NUEVO: Arranque inmediato de DHCP + RA =====
-                sh_script += """
-    # --- Servicio básico para conectividad instantánea ---
-    # Asignar IP fija a usb0
-    ifconfig usb0 192.168.10.1 netmask 255.255.255.0 up 2>/dev/null
-    # Iniciar dnsmasq con soporte IPv4 e IPv6 (RA)
-    dnsmasq --interface=usb0 --listen-address=192.168.10.1 \
-            --dhcp-range=192.168.10.10,192.168.10.250,12h \
-            --dhcp-option=3,192.168.10.1 --dhcp-option=6,192.168.10.1 \
-            --bind-interfaces --no-resolv --no-hosts --port=0 \
-            --dhcp-authoritative --enable-ra \
-            --dhcp-range=fd00::,ra-stateless,12h \
-            --log-dhcp &
-    # -----------------------------------------------------
-    """
-            # ==============================================
-
             # Comando final para encender el USB con retardo
             sh_script += "ls /sys/class/udc > UDC\n"
             sh_script += "sleep 2\n"
