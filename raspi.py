@@ -2268,12 +2268,17 @@ if __name__ == "__main__":
     ln -s functions/rndis.usb0 configs/c.1/
     ln -s configs/c.1 os_desc
     """
+
             # Lógica para ECM (Mac/Linux)
             elif modo == "ecm":
                 sh_script += """
     mkdir -p functions/ecm.usb0
+    # SOLUCIÓN: Fijar MAC estática para evitar que NetworkManager de Linux entre en pánico
+    echo "02:11:22:33:44:55" > functions/ecm.usb0/host_addr
+    echo "02:11:22:33:44:56" > functions/ecm.usb0/dev_addr
     ln -s functions/ecm.usb0 configs/c.1/
     """
+            
 
             # Comando final para encender el USB con retardo
             sh_script += "ls /sys/class/udc > UDC\n"
