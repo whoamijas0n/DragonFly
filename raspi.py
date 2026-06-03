@@ -2197,26 +2197,35 @@ WantedBy=sysinit.target
 modprobe libcomposite
 cd /sys/kernel/config/usb_gadget/
 
-# LIMPIEZA TOTAL DE GADGETS PREVIOS
+
+# LIMPIEZA TOTAL DE GADGETS PREVIOS (incluye sesiones anteriores)
+for dir in /sys/kernel/config/usb_gadget/*; do
+    if [ -d "$dir" ]; then
+        echo "" > "$dir/UDC" 2>/dev/null
+        sleep 0.2
+        rm -rf "$dir" 2>/dev/null
+    fi
+done
+# Ahora sí, limpiar 'dragonfly' si todavía existe
 if [ -d dragonfly ]; then
-  echo "" > dragonfly/UDC
-  rm -f dragonfly/configs/c.1/hid.usb0
-  rm -f dragonfly/configs/c.1/rndis.usb0
-  rm -f dragonfly/configs/c.1/ecm.usb0
-  rm -f dragonfly/os_desc/c.1
-  rmdir dragonfly/configs/c.1/strings/0x409
-  rmdir dragonfly/configs/c.1
-  rmdir dragonfly/functions/hid.usb0 2>/dev/null
-  rmdir dragonfly/functions/rndis.usb0 2>/dev/null
-  rmdir dragonfly/functions/ecm.usb0 2>/dev/null
-  rmdir dragonfly/strings/0x409
-  rmdir dragonfly
+    echo "" > dragonfly/UDC 2>/dev/null
+    sleep 0.2
+    rm -rf dragonfly 2>/dev/null
 fi
 
 mkdir -p dragonfly
 cd dragonfly
-echo 0x1d6b > idVendor
-echo 0x0104 > idProduct
+# Identificadores según el perfil
+if modo == "rndis":
+    sh_script += "echo 0x0525 > idVendor\n"
+    sh_script += "echo 0xa4a2 > idProduct\n"
+elif modo == "ecm":
+    sh_script += "echo 0x0525 > idVendor\n"
+    sh_script += "echo 0xa4a1 > idProduct\n"   # CDC Ethernet (funciona en Linux/Mac)
+else:
+    sh_script += "echo 0x1d6b > idVendor\n"
+    sh_script += "echo 0x0104 > idProduct\n"
+
 echo 0x0100 > bcdDevice
 echo 0x0200 > bcdUSB
 mkdir -p strings/0x409
@@ -2268,7 +2277,8 @@ ln -s functions/ecm.usb0 configs/c.1/
 
             # Comando final para encender el USB
             sh_script += "ls /sys/class/udc > UDC\n"
-
+            sh_script += "sleep 2\n"
+            
             # Guardar y aplicar
             with open("/tmp/usb_gadget.sh", "w") as f:
                 f.write(sh_script)
