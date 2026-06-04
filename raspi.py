@@ -2291,8 +2291,8 @@ if __name__ == "__main__":
             subprocess.run(f"sudo chmod +x {gadget_script}", shell=True)
             self.escribir_consola(f"[*] Perfil generado y limpiado. (Modo: {modo.upper()})")
 
-        self.escribir_consola("[+] Aplicado. REINICIANDO el sistema en 3 segundos...")
-        self.after(3000, lambda: subprocess.run("sudo reboot", shell=True))
+        self.escribir_consola("[+] Aplicado. APAGANDO el sistema en 3 segundos...")
+        self.after(3000, lambda: subprocess.run("sudo poweroff", shell=True))
     
     # =========================================================================
     # MODULO: ENVENENAMIENTO DE RED (POISON) - ESTANDARIZADO
@@ -2457,7 +2457,7 @@ if __name__ == "__main__":
         scroll_utils.pack(fill='both', expand=True, padx=2, pady=2)
 
         opciones = [
-            ("Activar Perfil: ANTENA WIFI", lambda: self._cambiar_modo_usb("host")),
+            ("Activar Perfil: MODO USB", lambda: self._cambiar_modo_usb("host")),
             ("Activar Perfil: RUBBER DUCKY", lambda: self._cambiar_modo_usb("gadget")),
             ("Activar Perfil: POISON (Red USB)", self._utils_poison_menu),
             ("Conectar a Red WiFi", self._utils_wifi_seleccionar_interfaz),
