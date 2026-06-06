@@ -643,6 +643,19 @@ class RedTeamApp(tk.Tk):
         except Exception:
             return ["wlan0", "eth0"]
 
+    def obtener_ip_local(self):
+        """Detecta automáticamente la IP local activa. Retorna 127.0.0.1 si no hay red."""
+        try:
+            # Creamos un socket UDP. No hace falta que el destino sea alcanzable, 
+            # solo le sirve al OS para determinar qué interfaz y qué IP usaría para salir.
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except Exception:
+            return "127.0.0.1"
+
     # ---------------- Validación IP ----------------
     def validar_ip_cidr(self):
         ip = self.target_ip.get().strip()
@@ -856,6 +869,14 @@ class RedTeamApp(tk.Tk):
         self.agregar_boton_atras(self.show_inicio_menu)
         ttk.Label(self.main_frame, text="RECONOCIMIENTO (NMAP)", style='Title.TLabel').pack(pady=(2,1))
 
+        # Si la IP es la que viene por defecto (127.0.0.1) o está en blanco, intenta detectarla
+        if self.target_ip.get() == "127.0.0.1" or not self.target_ip.get():
+            ip_detectada = self.obtener_ip_local()
+            self.target_ip.set(ip_detectada)
+            if ip_detectada != "127.0.0.1":
+                # Avisa silenciosamente en consola que se detectó una red
+                self.escribir_consola(f"[*] Red detectada automáticamente: {ip_detectada}")
+        # ------------------------------------------
         # Todo el contenido de Reconocimiento irá en este único ScrollableFrame
         scroll_cmds = ScrollableFrame(self.main_frame, max_items=20)
         scroll_cmds.pack(fill='both', expand=True, padx=2, pady=2)
