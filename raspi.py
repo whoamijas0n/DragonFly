@@ -2291,11 +2291,13 @@ if __name__ == "__main__":
     """
 
     # Lógica para ECM (Mac/Linux)
+            # Lógica para ECM (Mac/Linux)
             elif modo == "ecm":
                 sh_script += """
     mkdir -p functions/ecm.usb0
-    # Fijar MACs estáticas evita que NetworkManager en Linux rechace o demore el DHCP
-    echo "02:11:22:33:44:55" > functions/ecm.usb0/host_addr
+    # Generar MAC aleatoria para el host (evita que el NetworkManager de Linux bloquee la red tras varios intentos)
+    HOST_MAC=$(printf '02:%02x:%02x:%02x:%02x:%02x' $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)))
+    echo "$HOST_MAC" > functions/ecm.usb0/host_addr
     echo "02:11:22:33:44:56" > functions/ecm.usb0/dev_addr
     ln -s functions/ecm.usb0 configs/c.1/
     """
