@@ -2479,19 +2479,29 @@ if __name__ == "__main__":
         scroll_utils = ScrollableFrame(self.main_frame, max_items=20)
         scroll_utils.pack(fill='both', expand=True, padx=2, pady=2)
 
+        # LÓGICA DE BLOQUEO: Lista para rastrear los botones y aplicar estados
+        self.utils_botones_lista = []
+
+        # Función puente para activar el bloqueo antes de configurar el USB
+        def trigger_usb(modo):
+            self._bloquear_botones_utils()
+            self._cambiar_modo_usb(modo)
+
         opciones = [
-            ("Activar Perfil: MODO USB", lambda: self._cambiar_modo_usb("host")),
-            ("Activar Perfil: RUBBER DUCKY", lambda: self._cambiar_modo_usb("gadget")),
+            ("Activar Perfil: MODO USB", lambda: trigger_usb("host")),
+            ("Activar Perfil: RUBBER DUCKY", lambda: trigger_usb("gadget")),
             ("Activar Perfil: POISON (Red USB)", self._utils_poison_menu),
             ("Conectar a Red WiFi", self._utils_wifi_seleccionar_interfaz),
-            ("Redes WiFi Guardadas", self._utils_wifi_redes_guardadas), # NUEVA OPCIÓN
+            ("Redes WiFi Guardadas", self._utils_wifi_redes_guardadas),
             ("Estado de Red WiFi", self._utils_wifi_estado),
             ("Conectar Dispositivo BT", self._utils_bluetooth_seleccionar_interfaz),
             ("Estado de Adaptador BT", self._utils_bluetooth_estado),
-            ("Actualizar Sistema (APT)", self._utils_actualizar_sistema) # NUEVA OPCIÓN
+            ("Actualizar Sistema (APT)", self._utils_actualizar_sistema) 
         ]
+        
         for texto, cmd in opciones:
-            scroll_utils.add_button(text=texto, command=cmd, style='Red.TButton', width=28)
+            btn = scroll_utils.add_button(text=texto, command=cmd, style='Red.TButton', width=28)
+            if btn: self.utils_botones_lista.append(btn)
 
         ttk.Label(scroll_utils.scrollable_frame, text="SISTEMA", style='Title.TLabel').pack(pady=(4, 2))
         
@@ -2502,26 +2512,57 @@ if __name__ == "__main__":
             ("Conexiones", "ss -tulnp | head -10")
         ]
         for nombre, cmd in comandos_sys:
-            scroll_utils.add_button(text=nombre,
+            btn = scroll_utils.add_button(text=nombre,
                                   command=lambda c=cmd: self.ejecutar_comando(c, use_shell=True),
                                   style='Gray.TButton', width=28)
+            if btn: self.utils_botones_lista.append(btn)
 
         sys_opts = ttk.Frame(scroll_utils.scrollable_frame, style='Dark.TFrame')
         sys_opts.pack(fill='x', padx=5, pady=5)
-        # Modificado para soportar 3 columnas (0, 1, 2)
         sys_opts.grid_columnconfigure((0, 1, 2), weight=1)
         
-        ttk.Button(sys_opts, text="REINICIAR", style='Danger.TButton',
-                   command=lambda: subprocess.run("reboot", shell=True)).grid(row=0, column=0, padx=2, sticky="ew")
-        ttk.Button(sys_opts, text="APAGAR", style='Danger.TButton',
-                   command=lambda: subprocess.run("shutdown -h now", shell=True)).grid(row=0, column=1, padx=2, sticky="ew")
-        # NUEVO BOTÓN PARA SALIR DE LA INTERFAZ
-        ttk.Button(sys_opts, text="SALIR", style='Danger.TButton',
-                   command=self.destroy).grid(row=0, column=2, padx=2, sticky="ew")
-                                                                                        
+        btn_reboot = ttk.Button(sys_opts, text="REINICIAR", style='Danger.TButton',
+                   command=lambda: subprocess.run("reboot", shell=True))
+        btn_reboot.grid(row=0, column=0, padx=2, sticky="ew")
+        self.utils_botones_lista.append(btn_reboot)
+        
+        btn_poweroff = ttk.Button(sys_opts, text="APAGAR", style='Danger.TButton',
+                   command=lambda: subprocess.run("shutdown -h now", shell=True))
+        btn_poweroff.grid(row=0, column=1, padx=2, sticky="ew")
+        self.utils_botones_lista.append(btn_poweroff)
+        
+        btn_salir = ttk.Button(sys_opts, text="SALIR", style='Danger.TButton',
+                   command=self.destroy)
+        btn_salir.grid(row=0, column=2, padx=2, sticky="ew")
+        self.utils_botones_lista.append(btn_salir)
+                                                                                    
         self.mostrar_consola(parent=scroll_utils.scrollable_frame)
         gc.collect()
+
+    def _bloquear_botones_utils(self):
+        """Bloquea y cambia el estilo a gris de todos los botones de utilidades"""
+        self._estados_botones_utils = [] # Guardamos el estilo/color original
+        for btn in getattr(self, 'utils_botones_lista', []):
+            if btn and btn.winfo_exists():
+                self._estados_botones_utils.append((btn, btn.cget('style')))
+                btn.config(style='Gray.TButton')
+                btn.state(['disabled'])
         
+        # Bloquear también el botón de "Atrás"
+        if self.back_btn and self.back_btn.winfo_exists():
+            self.back_btn.state(['disabled'])
+
+    def _desbloquear_botones_utils(self):
+        """Restaura el estilo y desbloquea todos los botones de utilidades"""
+        for btn, original_style in getattr(self, '_estados_botones_utils', []):
+            if btn and btn.winfo_exists():
+                btn.config(style=original_style)
+                btn.state(['!disabled'])
+        self._estados_botones_utils = []
+        
+        # Desbloquear botón "Atrás"
+        if self.back_btn and self.back_btn.winfo_exists():
+            self.back_btn.state(['!disabled'])
 
     def _utils_poison_menu(self):
         self.limpiar_main_frame()
@@ -2533,18 +2574,35 @@ if __name__ == "__main__":
         
         ttk.Label(scroll.scrollable_frame, text="Selecciona el OS de la víctima:", style='Gray.TLabel').pack(pady=5)
 
+        self.poison_usb_botones_lista = []
+
+        # Función puente para bloquear el submenú y ejecutar
+        def trigger_poison_usb(modo):
+            for btn in self.poison_usb_botones_lista:
+                if btn and btn.winfo_exists():
+                    btn.config(style='Gray.TButton')
+                    btn.state(['disabled'])
+            # También bloqueamos el botón de retroceso
+            if self.back_btn and self.back_btn.winfo_exists():
+                self.back_btn.state(['disabled'])
+                
+            self._cambiar_modo_usb(modo)
+
         # Botón para víctimas Windows (Usa protocolo RNDIS)
-        scroll.add_button(text="Activar Windows (RNDIS)", 
-                          command=lambda: self._cambiar_modo_usb("rndis"), 
+        btn_win = scroll.add_button(text="Activar Windows (RNDIS)", 
+                          command=lambda: trigger_poison_usb("rndis"), 
                           style='Danger.TButton', width=28)
+        if btn_win: self.poison_usb_botones_lista.append(btn_win)
                           
         # Botón para víctimas Mac/Linux (Usa protocolo CDC ECM)
-        scroll.add_button(text="Activar Mac/Linux (CDC ECM)", 
-                          command=lambda: self._cambiar_modo_usb("ecm"), 
+        btn_mac = scroll.add_button(text="Activar Mac/Linux (CDC ECM)", 
+                          command=lambda: trigger_poison_usb("ecm"), 
                           style='Red.TButton', width=28)
+        if btn_mac: self.poison_usb_botones_lista.append(btn_mac)
 
         self.mostrar_consola(parent=scroll.scrollable_frame)
 
+    
     # -------------------- NUEVAS FUNCIONES DE SISTEMA Y RED --------------------
 
     def _utils_wifi_redes_guardadas(self):
@@ -2577,12 +2635,23 @@ if __name__ == "__main__":
         # Usamos nmcli connection up en lugar de device wifi connect porque ya tiene la contraseña guardada
         self.ejecutar_comando(f"nmcli connection up '{ssid}'", use_shell=True)
 
+
     def _utils_actualizar_sistema(self):
+        # 1. Aplicamos el bloqueo a la interfaz de utilidades
+        self._bloquear_botones_utils()
+        
         self.escribir_consola("[*] Iniciando actualización de repositorios...")
         self.escribir_consola("[!] Esto puede tardar varios minutos en la Pi Zero 2.")
-        # Encadenamos update y upgrade. La bandera -y evita que apt pregunte [Y/n] y se quede trabado
+        
         comando_update = "sudo apt update && sudo DEBIAN_FRONTEND=noninteractive apt upgrade -y"
-        self.ejecutar_comando(comando_update, callback_after=lambda: self.escribir_consola("[+] Actualización completada."), use_shell=True)
+        
+        # 2. Definimos la acción que deshará el bloqueo al concluir el hilo
+        def on_finish():
+            self.escribir_consola("[+] Actualización completada.")
+            self._desbloquear_botones_utils()
+
+        # Mandamos la ejecución delegando el desbloqueo al callback_after
+        self.ejecutar_comando(comando_update, callback_after=on_finish, use_shell=True)
 
     # -------------------- UTILIDADES WiFi --------------------
     def obtener_interfaces_wifi(self):
