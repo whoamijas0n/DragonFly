@@ -1131,6 +1131,7 @@ class RedTeamApp(tk.Tk):
                 self.handshake_iface_btns.append(btn)
                               
         self.mostrar_consola(parent=scroll.scrollable_frame)
+        
 
     def _wifi_escanear_redes_handshake(self, iface):
         # Bloquear los botones de las otras interfaces al hacer clic
@@ -1140,15 +1141,31 @@ class RedTeamApp(tk.Tk):
                 btn.state(['disabled'])
 
         self.wifi_state = {"iface": iface, "mon_iface": None}
-        self.escribir_consola(f"[*] Modo monitor en {iface}...")
-        subprocess.run(["sudo", "airmon-ng", "check", "kill"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(["sudo", "airmon-ng", "start", iface], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        mon = f"{iface}mon" if os.path.exists(f"/sys/class/net/{iface}mon") else iface
-        self.wifi_state["mon_iface"] = mon
-        scan_prefix = self._generar_nombre_temporal("wifi_handshake")
-        self.wifi_state["scan_file"] = scan_prefix
+        self.escribir_consola(f"[*] Preparando modo monitor en {iface}...")
 
         def escanear():
+            # 1. Desbloquear WiFi (Soluciona bloqueos de rfkill por defecto en OS Lite)
+            subprocess.run(["sudo", "rfkill", "unblock", "wifi"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+            # 2. Matar procesos que interfieren
+            subprocess.run(["sudo", "airmon-ng", "check", "kill"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+            # 3. Activar modo monitor
+            subprocess.run(["sudo", "airmon-ng", "start", iface], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+            # 4. Determinar la interfaz resultante
+            mon = f"{iface}mon" if os.path.exists(f"/sys/class/net/{iface}mon") else iface
+            self.wifi_state["mon_iface"] = mon
+            
+            # 5. FORZAR la interfaz hacia ARRIBA (Crucial en OS Lite)
+            subprocess.run(["sudo", "ifconfig", mon, "up"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+            self.after(0, lambda: self.escribir_consola(f"[*] Escaneando redes 15s con {mon}..."))
+            
+            scan_prefix = self._generar_nombre_temporal("wifi_handshake")
+            self.wifi_state["scan_file"] = scan_prefix
+
+            # 6. Ejecutar airodump-ng
             subprocess.run(f"sudo timeout 15s airodump-ng {mon} -w {scan_prefix} --output-format csv",
                            shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             redes = []
@@ -1160,14 +1177,17 @@ class RedTeamApp(tk.Tk):
                         if len(r) >= 14 and ":" in r[0]:
                             redes.append({"bssid": r[0].strip(), "ch": r[3].strip(),
                                          "essid": r[13].strip() if r[13].strip() else "<Oculta>"})
-            except: pass
+            except:
+                pass
             finally:
                 for ext in ['-01.csv', '-01.cap', '-01.kismet.csv', '-01.kismet.netxml']:
                     try: os.remove(f"{scan_prefix}{ext}")
                     except: pass
+                    
             self.after(0, lambda: self._wifi_mostrar_redes_handshake(redes))
+
+        # Lanzar escaneo en segundo plano para no trabar la UI
         threading.Thread(target=escanear, daemon=True).start()
-        self.escribir_consola("[*] Escaneando 15s...")
 
     def _wifi_mostrar_redes_handshake(self, redes):
         self.limpiar_main_frame()
@@ -1308,6 +1328,7 @@ class RedTeamApp(tk.Tk):
                               
         self.mostrar_consola(parent=scroll.scrollable_frame)
 
+
     def _evil_twin_escanear_redes(self, deauth_iface):
         # Bloquear botones de interfaces deauth
         for btn in getattr(self, 'evil_deauth_btns', []):
@@ -1316,16 +1337,23 @@ class RedTeamApp(tk.Tk):
                 btn.state(['disabled'])
 
         self.wifi_state["deauth_iface"] = deauth_iface
-        subprocess.run(["sudo", "airmon-ng", "check", "kill"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(["sudo", "airmon-ng", "start", deauth_iface], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        # ... El resto de este método queda igual (continúa con mon_deauth y scan_prefix)...
-        mon = f"{deauth_iface}mon" if os.path.exists(f"/sys/class/net/{deauth_iface}mon") else deauth_iface
-        self.wifi_state["mon_deauth"] = mon
-
-        scan_prefix = self._generar_nombre_temporal("evil_scan")
-        self.wifi_state["scan_file"] = scan_prefix
+        self.escribir_consola(f"[*] Preparando modo monitor en {deauth_iface}...")
 
         def escanear():
+            subprocess.run(["sudo", "rfkill", "unblock", "wifi"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["sudo", "airmon-ng", "check", "kill"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["sudo", "airmon-ng", "start", deauth_iface], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+            mon = f"{deauth_iface}mon" if os.path.exists(f"/sys/class/net/{deauth_iface}mon") else deauth_iface
+            self.wifi_state["mon_deauth"] = mon
+
+            subprocess.run(["sudo", "ifconfig", mon, "up"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+            self.after(0, lambda: self.escribir_consola(f"[*] Escaneando redes 15s con {mon}..."))
+
+            scan_prefix = self._generar_nombre_temporal("evil_scan")
+            self.wifi_state["scan_file"] = scan_prefix
+
             subprocess.run(f"sudo timeout 15s airodump-ng {mon} -w {scan_prefix} --output-format csv",
                            shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             redes = []
@@ -1349,7 +1377,6 @@ class RedTeamApp(tk.Tk):
             self.after(0, lambda: self._evil_twin_mostrar_redes(redes))
 
         threading.Thread(target=escanear, daemon=True).start()
-        self.escribir_consola("[*] Escaneando redes...")
 
     def _evil_twin_mostrar_redes(self, redes):
         self.limpiar_main_frame()
@@ -1710,38 +1737,50 @@ if __name__ == "__main__":
                               
         self.mostrar_consola(parent=scroll.scrollable_frame)
 
+
     def _deauth_escanear(self, iface):
         for btn in getattr(self, 'deauth_iface_btns', []):
             if btn and btn.winfo_exists():
                 btn.config(style='Gray.TButton')
                 btn.state(['disabled'])
 
-        self.wifi_state = {"iface": iface}
-        subprocess.run(["sudo", "airmon-ng", "check", "kill"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(["sudo", "airmon-ng", "start", iface], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        mon = f"{iface}mon" if os.path.exists(f"/sys/class/net/{iface}mon") else iface
-        self.wifi_state["mon_iface"] = mon
-        scan_prefix = self._generar_nombre_temporal("deauth_scan")
-        subprocess.run(f"sudo timeout 15s airodump-ng {mon} -w {scan_prefix} --output-format csv",
-                       shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        redes = []
-        try:
-            with open(f"{scan_prefix}-01.csv", "r", errors="ignore") as f:
-                for linea in f.read().split("\n")[2:]:
-                    r = linea.split(",")
-                    if len(r) >= 14 and ":" in r[0]:
-                        redes.append(
-                            {"bssid": r[0].strip(), "ch": r[3].strip(), "essid": r[13].strip() or "<Oculta>"})
-        except:
-            pass
-        finally:
-            for ext in ['-01.csv', '-01.cap', '-01.kismet.csv', '-01.kismet.netxml']:
-                try:
-                    os.remove(f"{scan_prefix}{ext}")
-                except:
-                    pass
-        self.after(0, lambda: self._deauth_mostrar_redes(redes))
+        self.wifi_state = {"iface": iface, "mon_iface": None}
+        self.escribir_consola(f"[*] Preparando modo monitor en {iface}...")
 
+        def escanear():
+            subprocess.run(["sudo", "rfkill", "unblock", "wifi"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["sudo", "airmon-ng", "check", "kill"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["sudo", "airmon-ng", "start", iface], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+            mon = f"{iface}mon" if os.path.exists(f"/sys/class/net/{iface}mon") else iface
+            self.wifi_state["mon_iface"] = mon
+
+            subprocess.run(["sudo", "ifconfig", mon, "up"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+            self.after(0, lambda: self.escribir_consola(f"[*] Escaneando redes 15s con {mon}..."))
+
+            scan_prefix = self._generar_nombre_temporal("deauth_scan")
+            subprocess.run(f"sudo timeout 15s airodump-ng {mon} -w {scan_prefix} --output-format csv",
+                           shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            redes = []
+            try:
+                with open(f"{scan_prefix}-01.csv", "r", errors="ignore") as f:
+                    for linea in f.read().split("\n")[2:]:
+                        r = linea.split(",")
+                        if len(r) >= 14 and ":" in r[0]:
+                            redes.append(
+                                {"bssid": r[0].strip(), "ch": r[3].strip(), "essid": r[13].strip() or "<Oculta>"})
+            except:
+                pass
+            finally:
+                for ext in ['-01.csv', '-01.cap', '-01.kismet.csv', '-01.kismet.netxml']:
+                    try:
+                        os.remove(f"{scan_prefix}{ext}")
+                    except:
+                        pass
+            self.after(0, lambda: self._deauth_mostrar_redes(redes))
+
+        threading.Thread(target=escanear, daemon=True).start()
 
     def _deauth_mostrar_redes(self, redes):
         self.limpiar_main_frame()
