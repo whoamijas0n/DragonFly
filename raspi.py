@@ -1196,50 +1196,73 @@ class RedTeamApp(tk.Tk):
         self.mostrar_consola(parent=scroll.scrollable_frame)
         gc.collect()
 
+
     def _wifi_seleccionar_cliente_handshake(self, red):
         self.wifi_state["target"] = red
-        mon = self.wifi_state["mon_iface"]
-        scan_prefix = self._generar_nombre_temporal("wifi_clients")
-        subprocess.run(f"sudo timeout 10s airodump-ng --bssid {red['bssid']} -c {red['ch']} {mon} -w {scan_prefix} --output-format csv",
-                       shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        clientes = []
-        try:
-            with open(f"{scan_prefix}-01.csv", "r", errors="ignore") as f:
-                partes = f.read().split("Station MAC,")
-                if len(partes) > 1:
-                    for linea in partes[1].split("\n")[1:]:
-                        c = linea.split(",")
-                        if len(c) >= 6 and ":" in c[0]: clientes.append(c[0].strip())
-        except: pass
-        finally:
-            for ext in ['-01.csv', '-01.cap', '-01.kismet.csv', '-01.kismet.netxml']:
-                try: os.remove(f"{scan_prefix}{ext}")
-                except: pass
-
+        
+        # 1. ACTUALIZAR LA INTERFAZ PRIMERO (Evita que parezca congelado al tocar la red)
         self.limpiar_main_frame()
         self.agregar_boton_atras(lambda: self._wifi_mostrar_redes_handshake([red]))
-        ttk.Label(self.main_frame, text="CLIENTES", style='Title.TLabel').pack(pady=2)
-        scroll = ScrollableFrame(self.main_frame, max_items=50)
-        scroll.pack(fill='both', expand=True, padx=5, pady=2)
-        
-        self.handshake_client_btns = []
-        
-        # Botón para Finalizar y Restaurar Red
-        btn_fin = scroll.add_button(text="FINALIZAR AUDITORÍA", style='Danger.TButton', width=28,
-                          command=self._wifi_finalizar_handshake)
-        if btn_fin: self.handshake_client_btns.append(btn_fin)
+        ttk.Label(self.main_frame, text=f"ESCANEANDO CLIENTES\n{red['essid']}", style='Title.TLabel', justify='center').pack(pady=10)
+        self.mostrar_consola()
+        self.escribir_consola(f"[*] Capturando tráfico de {red['essid']} por 10s...")
 
-        btn_broad = scroll.add_button(text="Todos (Broadcast)", style='Danger.TButton', width=28,
-                          command=lambda: self._wifi_iniciar_ataque_handshake("FF:FF:FF:FF:FF:FF"))
-        if btn_broad: self.handshake_client_btns.append(btn_broad)
-        
-        for mac in clientes:
-            btn = scroll.add_button(text=mac, style='Gray.TButton', width=28,
-                              command=lambda m=mac: self._wifi_iniciar_ataque_handshake(m))
-            if btn: self.handshake_client_btns.append(btn)
+        # 2. EJECUTAR EL ESCANEO EN SEGUNDO PLANO
+        def escanear_clientes():
+            mon = self.wifi_state["mon_iface"]
+            scan_prefix = self._generar_nombre_temporal("wifi_clients")
             
-        self.mostrar_consola(parent=scroll.scrollable_frame)
-        gc.collect()
+            # Ejecución subyacente con kill forzado (-k 5)
+            subprocess.run(f"sudo timeout -k 5 10s airodump-ng --bssid {red['bssid']} -c {red['ch']} {mon} -w {scan_prefix} --output-format csv",
+                           shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+            clientes = []
+            try:
+                with open(f"{scan_prefix}-01.csv", "r", errors="ignore") as f:
+                    partes = f.read().split("Station MAC,")
+                    if len(partes) > 1:
+                        for linea in partes[1].split("\n")[1:]:
+                            c = linea.split(",")
+                            if len(c) >= 6 and ":" in c[0]: 
+                                clientes.append(c[0].strip())
+            except: pass
+            finally:
+                for ext in ['-01.csv', '-01.cap', '-01.kismet.csv', '-01.kismet.netxml']:
+                    try: os.remove(f"{scan_prefix}{ext}")
+                    except: pass
+
+            # 3. DIBUJAR LA LISTA DE CLIENTES AL TERMINAR
+            def actualizar_gui():
+                self.limpiar_main_frame()
+                self.agregar_boton_atras(lambda: self._wifi_mostrar_redes_handshake([red]))
+                ttk.Label(self.main_frame, text="CLIENTES ENCONTRADOS", style='Title.TLabel').pack(pady=2)
+                
+                scroll = ScrollableFrame(self.main_frame, max_items=50)
+                scroll.pack(fill='both', expand=True, padx=5, pady=2)
+                
+                self.handshake_client_btns = []
+                
+                btn_fin = scroll.add_button(text="FINALIZAR AUDITORÍA", style='Danger.TButton', width=28,
+                                            command=self._wifi_finalizar_handshake)
+                if btn_fin: self.handshake_client_btns.append(btn_fin)
+
+                btn_broad = scroll.add_button(text="Todos (Broadcast)", style='Danger.TButton', width=28,
+                                              command=lambda: self._wifi_iniciar_ataque_handshake("FF:FF:FF:FF:FF:FF"))
+                if btn_broad: self.handshake_client_btns.append(btn_broad)
+                
+                for mac in clientes:
+                    btn = scroll.add_button(text=mac, style='Gray.TButton', width=28,
+                                            command=lambda m=mac: self._wifi_iniciar_ataque_handshake(m))
+                    if btn: self.handshake_client_btns.append(btn)
+                    
+                self.mostrar_consola(parent=scroll.scrollable_frame)
+                import gc; gc.collect()
+
+            # Volver al hilo principal para actualizar gráficos
+            self.after(0, actualizar_gui)
+
+        # Disparar hilo
+        threading.Thread(target=escanear_clientes, daemon=True).start()
 
     def _wifi_finalizar_handshake(self):
         # Bloquear los botones para evitar duplicados en la UI
@@ -1420,40 +1443,56 @@ class RedTeamApp(tk.Tk):
                           
         self.mostrar_consola(parent=scroll.scrollable_frame)
 
-    def _evil_twin_escanear_clientes(self, red, portal):
-        mon = self.wifi_state.get("mon_deauth")
-        scan_prefix = self._generar_nombre_temporal("evil_clients")
-        subprocess.run(
-            f"sudo timeout 10s airodump-ng --bssid {red['bssid']} -c {red['ch']} {mon} -w {scan_prefix} --output-format csv",
-            shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        clientes = []
-        try:
-            with open(f"{scan_prefix}-01.csv", "r", errors="ignore") as f:
-                partes = f.read().split("Station MAC,")
-                if len(partes) > 1:
-                    for linea in partes[1].split("\n")[1:]:
-                        c = linea.split(",")
-                        if len(c) >= 6 and ":" in c[0]: clientes.append(c[0].strip())
-        except:
-            pass
-        finally:
-            for ext in ['-01.csv', '-01.cap', '-01.kismet.csv', '-01.kismet.netxml']:
-                try:
-                    os.remove(f"{scan_prefix}{ext}")
-                except:
-                    pass
 
+    def _evil_twin_escanear_clientes(self, red, portal):
         self.limpiar_main_frame()
         self.agregar_boton_atras(lambda: self._evil_twin_seleccionar_deauth_mode(red, portal))
-        ttk.Label(self.main_frame, text="CLIENTES", style='Title.TLabel').pack(pady=2)
-        scroll = ScrollableFrame(self.main_frame, max_items=50)
-        scroll.pack(fill='both', expand=True, padx=5, pady=2)
-        for mac in clientes:
-            scroll.add_button(text=mac,
-                              command=lambda m=mac: self._evil_twin_ejecutar(red, portal, "directed", m),
-                              style='Gray.TButton', width=28)
-        self.mostrar_consola(parent=scroll.scrollable_frame)
-        gc.collect()
+        ttk.Label(self.main_frame, text=f"BUSCANDO VÍCTIMAS\n{red['essid']}", style='Title.TLabel', justify='center').pack(pady=10)
+        self.mostrar_consola()
+        self.escribir_consola("[*] Rastreando clientes objetivos (10s)...")
+
+        def escanear():
+            mon = self.wifi_state.get("mon_deauth")
+            scan_prefix = self._generar_nombre_temporal("evil_clients")
+            
+            subprocess.run(
+                f"sudo timeout -k 5 10s airodump-ng --bssid {red['bssid']} -c {red['ch']} {mon} -w {scan_prefix} --output-format csv",
+                shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+            clientes = []
+            try:
+                with open(f"{scan_prefix}-01.csv", "r", errors="ignore") as f:
+                    partes = f.read().split("Station MAC,")
+                    if len(partes) > 1:
+                        for linea in partes[1].split("\n")[1:]:
+                            c = linea.split(",")
+                            if len(c) >= 6 and ":" in c[0]: 
+                                clientes.append(c[0].strip())
+            except:
+                pass
+            finally:
+                for ext in ['-01.csv', '-01.cap', '-01.kismet.csv', '-01.kismet.netxml']:
+                    try: os.remove(f"{scan_prefix}{ext}")
+                    except: pass
+
+            def actualizar_gui():
+                self.limpiar_main_frame()
+                self.agregar_boton_atras(lambda: self._evil_twin_seleccionar_deauth_mode(red, portal))
+                ttk.Label(self.main_frame, text="SELECCIONAR MAC", style='Title.TLabel').pack(pady=2)
+                
+                scroll = ScrollableFrame(self.main_frame, max_items=50)
+                scroll.pack(fill='both', expand=True, padx=5, pady=2)
+                
+                for mac in clientes:
+                    scroll.add_button(text=mac,
+                                      command=lambda m=mac: self._evil_twin_ejecutar(red, portal, "directed", m),
+                                      style='Gray.TButton', width=28)
+                self.mostrar_consola(parent=scroll.scrollable_frame)
+                import gc; gc.collect()
+            
+            self.after(0, actualizar_gui)
+
+        threading.Thread(target=escanear, daemon=True).start()
 
     def _evil_twin_ejecutar(self, red, portal, deauth_mode, cliente_mac=None):
         timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
@@ -1803,38 +1842,55 @@ if __name__ == "__main__":
                           
         self.mostrar_consola(parent=scroll.scrollable_frame)
 
+
     def _deauth_escanear_clientes(self, red):
-        mon = self.wifi_state["mon_iface"]
-        scan_prefix = self._generar_nombre_temporal("deauth_clients")
-        subprocess.run(
-            f"sudo timeout 10s airodump-ng --bssid {red['bssid']} -c {red['ch']} {mon} -w {scan_prefix} --output-format csv",
-            shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        clientes = []
-        try:
-            with open(f"{scan_prefix}-01.csv", "r", errors="ignore") as f:
-                partes = f.read().split("Station MAC,")
-                if len(partes) > 1:
-                    for linea in partes[1].split("\n")[1:]:
-                        c = linea.split(",")
-                        if len(c) >= 6 and ":" in c[0]: clientes.append(c[0].strip())
-        except:
-            pass
-        finally:
-            for ext in ['-01.csv', '-01.cap', '-01.kismet.csv', '-01.kismet.netxml']:
-                try:
-                    os.remove(f"{scan_prefix}{ext}")
-                except:
-                    pass
         self.limpiar_main_frame()
         self.agregar_boton_atras(lambda: self._deauth_seleccionar_modo(red))
-        ttk.Label(self.main_frame, text="SELECCIONA CLIENTE", style='Title.TLabel').pack(pady=2)
-        scroll = ScrollableFrame(self.main_frame, max_items=50)
-        scroll.pack(fill='both', expand=True, padx=5, pady=2)
-        for mac in clientes:
-            scroll.add_button(text=mac, command=lambda m=mac: self._deauth_ejecutar(m),
-                              style='Gray.TButton', width=28)
-        self.mostrar_consola(parent=scroll.scrollable_frame)
-        gc.collect()
+        ttk.Label(self.main_frame, text=f"RASTREANDO MACs\n{red['essid']}", style='Title.TLabel', justify='center').pack(pady=10)
+        self.mostrar_consola()
+        self.escribir_consola("[*] Escaneando clientes activos en el canal (10s)...")
+
+        def escanear():
+            mon = self.wifi_state["mon_iface"]
+            scan_prefix = self._generar_nombre_temporal("deauth_clients")
+            
+            subprocess.run(
+                f"sudo timeout -k 5 10s airodump-ng --bssid {red['bssid']} -c {red['ch']} {mon} -w {scan_prefix} --output-format csv",
+                shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+            clientes = []
+            try:
+                with open(f"{scan_prefix}-01.csv", "r", errors="ignore") as f:
+                    partes = f.read().split("Station MAC,")
+                    if len(partes) > 1:
+                        for linea in partes[1].split("\n")[1:]:
+                            c = linea.split(",")
+                            if len(c) >= 6 and ":" in c[0]: 
+                                clientes.append(c[0].strip())
+            except:
+                pass
+            finally:
+                for ext in ['-01.csv', '-01.cap', '-01.kismet.csv', '-01.kismet.netxml']:
+                    try: os.remove(f"{scan_prefix}{ext}")
+                    except: pass
+
+            def actualizar_gui():
+                self.limpiar_main_frame()
+                self.agregar_boton_atras(lambda: self._deauth_seleccionar_modo(red))
+                ttk.Label(self.main_frame, text="SELECCIONA CLIENTE", style='Title.TLabel').pack(pady=2)
+                
+                scroll = ScrollableFrame(self.main_frame, max_items=50)
+                scroll.pack(fill='both', expand=True, padx=5, pady=2)
+                
+                for mac in clientes:
+                    scroll.add_button(text=mac, command=lambda m=mac: self._deauth_ejecutar(m),
+                                      style='Gray.TButton', width=28)
+                self.mostrar_consola(parent=scroll.scrollable_frame)
+                import gc; gc.collect()
+
+            self.after(0, actualizar_gui)
+
+        threading.Thread(target=escanear, daemon=True).start()
 
     def _deauth_ejecutar(self, cliente):
         red = self.wifi_state["target"]
