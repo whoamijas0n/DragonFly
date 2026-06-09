@@ -93,7 +93,7 @@ COLOR_FONDO_CARD      = "#1f1f1f"   # Paneles / cards / menús de lista
 COLOR_FONDO_ELEVADO   = "#272727"   # Dropdowns, overlays
 
 # Rojos operacionales
-COLOR_BOTON_ROJO      = "#9c020b"   # +20% luminancia vs original → TFT-safe
+COLOR_BOTON_ROJO      = "#8a0008"   # +20% luminancia vs original → TFT-safe
 COLOR_BOTON_HOVER     = "#900008"   # Pressed / active
 COLOR_ROJO_BRIGHT     = "#ff2222"   # Solo indicadores: alertas, cursor
 
