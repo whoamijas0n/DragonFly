@@ -8,8 +8,7 @@ import re
 import tempfile
 from datetime import datetime
 import glob
-import ducky_logic
-from gadget_handler import BLEGadget
+
 
 # ==========================================
 # CONFIGURACION VISUAL PRO (Red Team Theme)
@@ -26,7 +25,6 @@ COLOR_BOTON_PELIGRO = "#ff9900"
 BASE_DIR_NMAP = "Resultados_Nmap"
 BASE_DIR_WIFI = "Resultados_Handshake"
 BASE_DIR_EVIL = "Resultados_EvilTwin"
-BASE_DIR_BLE = "Resultados_BLE"
 
 class RedTeamApp(ctk.CTk):
     def __init__(self):
@@ -67,7 +65,6 @@ class RedTeamApp(ctk.CTk):
         
         # Estado para flujos complejos (WiFi, BLE)
         self.wifi_state = {}
-        self.ble_state = {}
         self.navigation_stack = []  # Pila para volver atrás en menús dinámicos
 
         # --- NUEVO: Referencias a procesos para Evil Twin ---
@@ -80,24 +77,8 @@ class RedTeamApp(ctk.CTk):
         self.evil_twin_stop = False
 
         # Crear directorios base
-        for d in [BASE_DIR_NMAP, BASE_DIR_WIFI, BASE_DIR_EVIL, BASE_DIR_BLE]:
+        for d in [BASE_DIR_NMAP, BASE_DIR_WIFI, BASE_DIR_EVIL]:
             os.makedirs(d, exist_ok=True)
-
-        # ==========================================
-        # INICIALIZACIÓN DEL GADGET BLE 
-        # ==========================================
-        try:
-            self.gadget = BLEGadget()
-            if self.gadget.is_available():
-                self.gadget_available = True
-                print("[+] Gadget ESP32 BLE conectado correctamente.")
-            else:
-                self.gadget_available = False
-                print("[!] Gadget ESP32 BLE no detectado.")
-        except Exception as e:
-            self.gadget = None
-            self.gadget_available = False
-            print(f"[!] Error al inicializar gadget BLE: {e}")
 
 
         # Sidebar
@@ -115,10 +96,7 @@ class RedTeamApp(ctk.CTk):
         self.btn_nmap = self.crear_boton_menu("1. Reconocimiento", self.show_recon_menu, 2)
         self.btn_mac = self.crear_boton_menu("2. MAC Changer", self.show_mac_menu, 3)
         self.btn_wifi = self.crear_boton_menu("3. Auditoría WiFi", self.show_wifi_menu, 4)
-        self.btn_bluetooth = self.crear_boton_menu("4. Bluetooth BLE", self.show_bluetooth_menu, 5)
-        self.btn_rubber = self.crear_boton_menu("5. Rubber Ducky", self.show_ducky_menu, 6)
-        self.btn_poison = self.crear_boton_menu("7. PoisonTap", self.show_poison_menu, 7)
-        self.btn_utils = self.crear_boton_menu("8. Utilidades OS", self.show_utils_menu, 8)
+        self.btn_utils = self.crear_boton_menu("4. Utilidades OS", self.show_utils_menu, 5)
 
         # Frame principal (scrollable)
         self.main_frame = ctk.CTkScrollableFrame(self, corner_radius=15, fg_color=COLOR_FONDO_PRINCIPAL)
@@ -239,7 +217,7 @@ class RedTeamApp(ctk.CTk):
         # Título de bienvenida
         titulo = ctk.CTkLabel(
             container,
-            text="BIENVENIDO AL SISTEMA DRAGON FLY",
+            text="BIENVENIDO A DRAGONFLY SYSTEM",
             font=ctk.CTkFont(size=28, weight="bold"),
             text_color="#ff4d4d"
         )
@@ -297,15 +275,37 @@ class RedTeamApp(ctk.CTk):
                                                                                                
 
         """
+        lineas_ascii = ascii_art.split('\n')
+        max_caracteres = max(len(linea) for linea in lineas_ascii) if lineas_ascii else 100
+        # 2. Crear un objeto de fuente dinámico y separado
+        ascii_font = ctk.CTkFont(family="Courier", size=14, weight="bold")
         
         ascii_label = ctk.CTkLabel(
             container,
             text=ascii_art,
-            font=ctk.CTkFont(family="Courier", size=14, weight="bold"),
+            font=ascii_font,
             text_color="#ff4d4d",      # Rojo intenso
             justify="center"
         )
-        ascii_label.pack(pady=10)
+        # 3. Empaquetar el label asegurando que pueda tomar todo el espacio horizontal
+        ascii_label.pack(pady=10, fill="x", expand=True)
+        
+        # 4. Función de escalado que reacciona al tamaño de la pantalla/ventana
+        def adaptar_arte_ascii(event):
+            # Una fuente monoespaciada suele tener una proporción de ancho/alto de ~0.6
+            # Usamos el 95% del ancho del contenedor (0.95) para dejar un margen limpio
+            if event.width > 50:
+                nuevo_tamano = int((event.width * 0.95) / (max_caracteres * 0.6))
+                
+                # Establecer límites de tamaño (mínimo 3px para pantallas muy pequeñas, máximo 18px)
+                nuevo_tamano = max(3, min(nuevo_tamano, 18))
+                
+                # Actualizar la fuente solo si el tamaño cambia (evita el consumo innecesario de CPU/parpadeos)
+                if ascii_font.cget("size") != nuevo_tamano:
+                    ascii_font.configure(size=nuevo_tamano)
+
+        # 5. Vincular el evento de redimensión del contenedor a la función matemática
+        container.bind("<Configure>", adaptar_arte_ascii)
         
         # Línea decorativa
         ctk.CTkFrame(container, height=2, fg_color="#ff4d4d").pack(fill="x", padx=50, pady=20)
@@ -1187,459 +1187,6 @@ no-resolv
                                    command=lambda ra=ruta_arch: self.ejecutar_comando(f"less '{ra}'"))
             btn.pack(fill="x", pady=3)
         self.mostrar_consola()
-
- 
-    # ==========================================
-    # MENÚ BLUETOOTH
-    # ==========================================
-    def show_bluetooth_menu(self):
-        self.limpiar_main_frame()
-        ctk.CTkLabel(self.main_frame, text="AUDITORÍA BLUETOOTH BLE",
-                     font=ctk.CTkFont(size=20, weight="bold")).pack(pady=(10,15))
-
-        # Indicador de estado del gadget
-        gadget_status = "Conectado" if self.gadget_available else "Desconectado"
-        ctk.CTkLabel(self.main_frame, text=f"Gadget ESP32: {gadget_status}",
-                     text_color="#00ff00" if self.gadget_available else "#ff4d4d",
-                     font=ctk.CTkFont(size=12)).pack(pady=(0,10))
-
-        if self.gadget_available:
-            # --- OPCIONES CON GADGET ---
-            btn_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
-            btn_frame.pack(fill="x", padx=20, pady=5)
-
-            ctk.CTkButton(btn_frame, text="Escanear BLE (HSPI)", fg_color=COLOR_BOTON_ROJO,
-                          hover_color=COLOR_BOTON_HOVER, height=40,
-                          command=lambda: self._ble_scan_gadget(0)).pack(fill="x", pady=5)
-            ctk.CTkButton(btn_frame, text="Escanear BLE (VSPI)", fg_color=COLOR_BOTON_ROJO,
-                          hover_color=COLOR_BOTON_HOVER, height=40,
-                          command=lambda: self._ble_scan_gadget(1)).pack(fill="x", pady=5)
-            ctk.CTkButton(btn_frame, text="Bluejacking (Enviar mensaje)", fg_color=COLOR_BOTON_ROJO,
-                          hover_color=COLOR_BOTON_HOVER, height=40,
-                          command=self._bluejacking_gui).pack(fill="x", pady=5)
-            ctk.CTkButton(btn_frame, text="Beacon Flooding (Saturación)", fg_color=COLOR_BOTON_ROJO,
-                          hover_color=COLOR_BOTON_HOVER, height=40,
-                          command=self._beacon_flood_gui).pack(fill="x", pady=5)
-            ctk.CTkButton(btn_frame, text="Jammer Bluetooth", fg_color=COLOR_BOTON_ROJO,
-                          hover_color=COLOR_BOTON_HOVER, height=40,
-                          command=self._jammer_gui).pack(fill="x", pady=5)
-
-            # En show_bluetooth_menu, dentro del if self.gadget_available:
-            ctk.CTkButton(btn_frame, text="Barrido Jammer (Frequency Hopping)", fg_color=COLOR_BOTON_ROJO,
-                        hover_color=COLOR_BOTON_HOVER, height=40,
-                        command=self._sweep_jammer_gui).pack(fill="x", pady=5)
-
-            ctk.CTkButton(btn_frame, text="Detener todo (Gadget)", fg_color=COLOR_BOTON_PELIGRO,
-                          hover_color="#cc7a00", height=40,
-                          command=self._gadget_stop_all).pack(fill="x", pady=5)
-            ctk.CTkButton(btn_frame, text="Estado del Gadget", fg_color="#4a4a4a",
-                          hover_color="#2b2b2b", height=40,
-                          command=self._gadget_status).pack(fill="x", pady=5)
-        else:
-            # --- MODO LEGACY (bluetoothctl) ---
-            ctk.CTkButton(self.main_frame, text="Escanear Dispositivos BLE", fg_color=COLOR_BOTON_ROJO,
-                          hover_color=COLOR_BOTON_HOVER, height=40,
-                          command=self._ble_escanear).pack(fill="x", padx=40, pady=8)
-
-        # Opción común para ambos modos
-        ctk.CTkButton(self.main_frame, text="Explorar Resultados BLE", fg_color="#4a4a4a",
-                      hover_color="#2b2b2b", height=40,
-                      command=lambda: self._mostrar_explorador_generico(BASE_DIR_BLE, "RESULTADOS BLE", self.show_bluetooth_menu)
-                      ).pack(fill="x", padx=40, pady=8)
-
-        self.mostrar_consola()
-
-    # ==========================================
-    # NUEVOS MÉTODOS DE ATAQUE CON GADGET
-    # ==========================================
-    def _ble_scan_gadget(self, module):
-        """Escanea BLE usando el módulo indicado del gadget."""
-        self.limpiar_main_frame()
-        self.agregar_boton_atras(self.show_bluetooth_menu)
-        ctk.CTkLabel(self.main_frame, text=f"ESCANEANDO BLE (MÓDULO {module})...",
-                     font=ctk.CTkFont(size=16)).pack(pady=10)
-        self.mostrar_consola()
-        self.escribir_consola(f"[*] Iniciando escaneo con módulo {module} (duración 10s)...")
-
-        def callback(devices):
-            self.after(0, lambda: self._ble_gadget_mostrar_dispositivos(devices, module))
-        self.gadget.scan(module, 10, callback)
-
-    def _ble_gadget_mostrar_dispositivos(self, dispositivos, module):
-        self.limpiar_main_frame()
-        self.agregar_boton_atras(self.show_bluetooth_menu)
-        ctk.CTkLabel(self.main_frame, text="DISPOSITIVOS ENCONTRADOS (Gadget)",
-                     font=ctk.CTkFont(size=16, weight="bold")).pack(pady=10)
-        if not dispositivos:
-            ctk.CTkLabel(self.main_frame, text="No se encontraron dispositivos.").pack()
-            return
-        frame = ctk.CTkScrollableFrame(self.main_frame, height=300)
-        frame.pack(fill="both", expand=True, padx=20, pady=10)
-        for dev in dispositivos:
-            texto = f"{dev['name'][:30]}  ({dev['mac']})  RSSI:{dev['rssi']}"
-            btn = ctk.CTkButton(frame, text=texto, fg_color="#2b2b2b",
-                                hover_color=COLOR_BOTON_HOVER,
-                                command=lambda d=dev: self._ble_acciones(d))
-            btn.pack(fill="x", pady=3)
-        self.mostrar_consola()
-
-    def _bluejacking_gui(self):
-        """Interfaz para enviar un mensaje de publicidad BLE (bluejacking)."""
-        dialog = ctk.CTkInputDialog(text="Mensaje a enviar en advertising:", title="Bluejacking")
-        msg = dialog.get_input()
-        if msg:
-            # Usar módulo 0 por defecto
-            self.escribir_consola(f"[*] Enviando publicidad: {msg}")
-            self.gadget.advertise(0, msg)
-            # Botón para detener (agregar a la interfaz actual)
-            self.limpiar_main_frame()
-            self.agregar_boton_atras(self.show_bluetooth_menu)
-            ctk.CTkLabel(self.main_frame, text="Publicidad activa. Mensaje: " + msg,
-                         font=ctk.CTkFont(size=14)).pack(pady=20)
-            ctk.CTkButton(self.main_frame, text="Detener Publicidad", fg_color=COLOR_BOTON_PELIGRO,
-                          command=lambda: self.gadget.stop(0)).pack(pady=10)
-            self.mostrar_consola()
-
-    def _beacon_flood_gui(self):
-        """Configura y lanza un ataque de beacon flooding."""
-        dialog_count = ctk.CTkInputDialog(text="Cantidad de beacons:", title="Beacon Flood")
-        count_str = dialog_count.get_input()
-        if not count_str:
-            count = 50
-        else:
-            count = int(count_str)
-        dialog_interval = ctk.CTkInputDialog(text="Intervalo (ms):", title="Beacon Flood")
-        interval_str = dialog_interval.get_input()
-        if not interval_str:
-            interval = 200
-        else:
-            interval = int(interval_str)
-
-        self.escribir_consola(f"[*] Iniciando beacon flood: {count} beacons cada {interval}ms")
-        self.gadget.beacon_flood(0, count, interval)
-        self.limpiar_main_frame()
-        self.agregar_boton_atras(self.show_bluetooth_menu)
-        ctk.CTkLabel(self.main_frame, text=f"Flood en curso: {count} beacons.", font=ctk.CTkFont(size=14)).pack(pady=20)
-        ctk.CTkButton(self.main_frame, text="Detener Flood", fg_color=COLOR_BOTON_PELIGRO,
-                      command=lambda: self.gadget.stop(0)).pack(pady=10)
-        self.mostrar_consola()
-
-    def _jammer_gui(self):
-        """Activa jammer en un canal BLE específico."""
-        dialog_ch = ctk.CTkInputDialog(text="Canal (0-78):", title="Jammer BLE")
-        ch_str = dialog_ch.get_input()
-        if not ch_str:
-            return
-        channel = int(ch_str)
-        dialog_dur = ctk.CTkInputDialog(text="Duración (segundos):", title="Jammer BLE")
-        dur_str = dialog_dur.get_input()
-        if not dur_str:
-            return
-        duration = int(dur_str)
-
-        self.escribir_consola(f"[*] Iniciando jamming en canal {channel} por {duration}s")
-        self.gadget.jam(0, channel, duration)
-        self.limpiar_main_frame()
-        self.agregar_boton_atras(self.show_bluetooth_menu)
-        ctk.CTkLabel(self.main_frame, text=f"Jamming en canal {channel}...", font=ctk.CTkFont(size=14)).pack(pady=20)
-        ctk.CTkButton(self.main_frame, text="Detener Jammer", fg_color=COLOR_BOTON_PELIGRO,
-                      command=lambda: self.gadget.stop(0)).pack(pady=10)
-        self.mostrar_consola()
-
-
-    def _sweep_jammer_gui(self):
-        """Configura y lanza el jammer de barrido de frecuencia."""
-        dialog_dur = ctk.CTkInputDialog(text="Duración del barrido (segundos):", title="Barrido Jammer")
-        dur_str = dialog_dur.get_input()
-        if not dur_str:
-            return
-        duration = int(dur_str)
-
-        self.escribir_consola(f"[*] Iniciando barrido jammer durante {duration}s...")
-        self.gadget.sweep_jam(0, duration)
-        self.limpiar_main_frame()
-        self.agregar_boton_atras(self.show_bluetooth_menu)
-        ctk.CTkLabel(self.main_frame, text=f"Barrido Jammer activo. Duración: {duration}s",
-                    font=ctk.CTkFont(size=14)).pack(pady=20)
-        ctk.CTkButton(self.main_frame, text="Detener Barrido", fg_color=COLOR_BOTON_PELIGRO,
-                    command=lambda: self.gadget.stop(0)).pack(pady=10)
-        self.mostrar_consola()
-
-
-
-    def _gadget_stop_all(self):
-        """Detiene cualquier operación en ambos módulos del gadget."""
-        self.escribir_consola("[*] Deteniendo módulos del gadget...")
-        self.gadget.stop(0)
-        self.gadget.stop(1)
-
-    def _gadget_status(self):
-        """Muestra el estado de los módulos del gadget."""
-        if self.gadget_available:
-            status = self.gadget.status()
-            self.escribir_consola(f"[+] Estado gadget: {status}")
-        else:
-            self.escribir_consola("[!] Gadget no disponible.")
-
-
-    # ==========================================
-    # MÉTODOS LEGACY PARA BLUETOOTH (sin gadget)
-    # ==========================================
-    def _ble_escanear(self):
-        """Escanea dispositivos BLE usando bluetoothctl (modo legacy sin gadget)"""
-        self.limpiar_main_frame()
-        self.agregar_boton_atras(self.show_bluetooth_menu)
-        ctk.CTkLabel(self.main_frame, text="ESCANEANDO DISPOSITIVOS BLE...",
-                     font=ctk.CTkFont(size=16, weight="bold")).pack(pady=20)
-        self.mostrar_consola()
-        self.escribir_consola("[*] Iniciando escaneo con bluetoothctl durante 12 segundos...")
-
-        def escanear():
-            # Asegurar que el adaptador esté encendido
-            os.system("sudo hciconfig hci0 up 2>/dev/null")
-            os.system("sudo bluetoothctl power on 2>/dev/null")
-            # Iniciar escaneo
-            os.system("sudo bluetoothctl scan on &")
-            time.sleep(12)
-            os.system("sudo bluetoothctl scan off 2>/dev/null")
-            # Obtener lista de dispositivos
-            dispositivos = []
-            try:
-                output = subprocess.check_output("sudo bluetoothctl devices", shell=True, text=True)
-                for line in output.splitlines():
-                    if "Device" in line:
-                        parts = line.strip().split(' ', 2)
-                        if len(parts) >= 3:
-                            mac = parts[1]
-                            nombre = parts[2]
-                            dispositivos.append({"mac": mac, "nombre": nombre})
-            except Exception as e:
-                self.escribir_consola(f"[!] Error: {e}")
-            self.after(0, lambda: self._mostrar_dispositivos_ble(dispositivos))
-        threading.Thread(target=escanear, daemon=True).start()
-
-
-    def _mostrar_dispositivos_ble(self, dispositivos):
-        self.limpiar_main_frame()
-        self.agregar_boton_atras(self.show_bluetooth_menu)
-        ctk.CTkLabel(self.main_frame, text="DISPOSITIVOS BLE ENCONTRADOS",
-                     font=ctk.CTkFont(size=16, weight="bold")).pack(pady=10)
-        if not dispositivos:
-            ctk.CTkLabel(self.main_frame, text="No se encontraron dispositivos.").pack()
-            return
-        frame = ctk.CTkScrollableFrame(self.main_frame, height=300)
-        frame.pack(fill="both", expand=True, padx=20, pady=10)
-        for dev in dispositivos:
-            texto = f"{dev['nombre']}  ({dev['mac']})"
-            btn = ctk.CTkButton(frame, text=texto, fg_color="#2b2b2b",
-                                hover_color=COLOR_BOTON_HOVER,
-                                command=lambda d=dev: self._ble_conectar_legacy(d['mac']))
-            btn.pack(fill="x", pady=3)
-        self.mostrar_consola()
-
-    
-
-    def _ble_conectar_legacy(self, mac):
-        """Intenta emparejar y conectar a un dispositivo BLE usando bluetoothctl"""
-        self.escribir_consola(f"[*] Conectando a {mac}...")
-        def conectar():
-            try:
-                subprocess.run(f"sudo bluetoothctl pair {mac}", shell=True, timeout=30)
-                subprocess.run(f"sudo bluetoothctl connect {mac}", shell=True, timeout=30)
-                self.escribir_consola(f"[+] Conectado a {mac}")
-            except Exception as e:
-                self.escribir_consola(f"[!] Error: {e}")
-        threading.Thread(target=conectar, daemon=True).start()
-
-    # ==========================================
-    # MENÚ RUBBER DUCKY
-    # ==========================================
-    def show_ducky_menu(self):
-        self.limpiar_main_frame()
-        ctk.CTkLabel(self.main_frame, text="RUBBER DUCKY PAYLOADS", font=ctk.CTkFont(size=20, weight="bold")).pack(pady=(10,15))
-        payloads_dir = "payloads"
-        os.makedirs(payloads_dir, exist_ok=True)
-        archivos = [f for f in os.listdir(payloads_dir) if f.endswith(".txt")]
-        if not archivos:
-            ctk.CTkLabel(self.main_frame, text="No hay payloads en la carpeta 'payloads/'.").pack(pady=20)
-            return
-        frame = ctk.CTkScrollableFrame(self.main_frame, height=300)
-        frame.pack(fill="both", expand=True, padx=20, pady=10)
-        for archivo in archivos:
-            ruta = os.path.join(payloads_dir, archivo)
-            btn = ctk.CTkButton(frame, text=archivo, fg_color=COLOR_BOTON_ROJO, hover_color=COLOR_BOTON_HOVER,
-                               command=lambda r=ruta: self._ejecutar_ducky(r))
-            btn.pack(fill="x", pady=5)
-        self.mostrar_consola()
-
-    def _ejecutar_ducky(self, ruta):
-        self.escribir_consola(f"\n[+] Ejecutando payload: {os.path.basename(ruta)}")
-        self.escribir_consola("[!] Tienes 2 segundos para situar el cursor...")
-        def run():
-            time.sleep(2)
-            try:
-                ducky_logic.ejecutar_script_ducky(ruta)
-                self.escribir_consola("[+] Payload finalizado.")
-            except Exception as e:
-                self.escribir_consola(f"[!] Error: {e}")
-        threading.Thread(target=run, daemon=True).start()
-
-
-    # ==========================================
-    # MENÚ POISON TAP
-    # ==========================================
-
-    def show_poison_menu(self):
-        """Menú para lanzar el ataque PoisonTap con monitor integrado y visor de logs."""
-        self.limpiar_main_frame()
-        
-        # 1. TÍTULO Y DESCRIPCIÓN
-        ctk.CTkLabel(self.main_frame, text="ATAQUE DE RED POISONTAP", 
-                     font=ctk.CTkFont(size=24, weight="bold"), text_color="#ff4d4d").pack(pady=(40, 10))
-
-        ctk.CTkLabel(self.main_frame, text="Este módulo emula un adaptador Ethernet para\nsecuestrar el tráfico y capturar credenciales.",
-                     font=ctk.CTkFont(size=14), text_color="#cccccc").pack(pady=10)
-
-        ctk.CTkFrame(self.main_frame, height=2, fg_color="#ff4d4d").pack(fill="x", padx=50, pady=20)
-
-        # 2. CONTENEDOR DE BOTONES
-        botones_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
-        botones_frame.pack(pady=10)
-
-        # Aquí es donde se pega el bloque de los botones con los nuevos colores:
-
-        # Botón Lanzar
-        self.btn_ejecutar_ataque = ctk.CTkButton(
-            botones_frame, text="LANZAR ATAQUE", command=self.lanzar_ataque_hilo, 
-            fg_color="#990000", hover_color="#660000", font=ctk.CTkFont(size=15, weight="bold"),
-            height=45, width=150
-        )
-        self.btn_ejecutar_ataque.pack(side="left", padx=10)
-
-        # Botón Detener (Arranca desactivado en gris)
-        self.btn_detener_ataque = ctk.CTkButton(
-            botones_frame, text="DETENER ATAQUE", command=self.detener_ataque, 
-            fg_color="#444444", hover_color="#222222", font=ctk.CTkFont(size=15, weight="bold"),
-            height=45, width=150, state="disabled"
-        )
-        self.btn_detener_ataque.pack(side="left", padx=10)
-
-        # Botón Ver Logs (Color Amarillo/Naranja con Letras Blancas)
-        self.btn_ver_logs = ctk.CTkButton(
-            botones_frame, text="VER LOGS", command=self.abrir_visor_logs, 
-            fg_color="#ff9900", hover_color="#cc7a00", font=ctk.CTkFont(size=15, weight="bold"),
-            text_color="#ffffff", # <-- Cambiado a letras blancas
-            height=45, width=150
-        )
-        self.btn_ver_logs.pack(side="left", padx=10)
-
-        # 3. CONSOLA DE MONITOREO
-        self.consola = ctk.CTkTextbox(self.main_frame, width=650, height=250, fg_color="#000000", 
-                                      text_color="#00ff00", font=ctk.CTkFont(family="Courier", size=12))
-        self.consola.pack(pady=20, padx=20)
-        self.consola.insert("0.0", "[>] Dragon Fly: Sistema listo en eth1. Esperando ejecución...\n")
-
-    def lanzar_ataque_hilo(self):
-        """Ejecuta la lógica de ataque y cambia los colores de los botones."""
-        self.btn_ejecutar_ataque.configure(state="disabled", text="ATAQUE EN CURSO...", fg_color="#2b2b2b")
-        
-        # El botón detener se activa usando el rojo oscuro idéntico
-        self.btn_detener_ataque.configure(state="normal", fg_color="#990000", hover_color="#660000")
-        
-        self.consola.insert("end", "[!] Motor Dragon-Fly activo...\n")
-        self.consola.see("end")
-        
-        threading.Thread(target=self.ejecutar_logica_ataque, daemon=True).start()
-
-    def ejecutar_logica_ataque(self):
-        try:
-            import network_modules.poison_logic as poison_logic
-            poison_logic.iniciar_ataque_red(
-                "eth1", 
-                callback_consola=lambda texto: self.after(
-                    0, lambda: [self.consola.insert("end", texto), self.consola.see("end")]
-                )
-            )
-        except Exception as e:
-            self.after(0, lambda: self.consola.insert("end", f"\n[ERROR CRÍTICO]: {e}\n"))
-        finally:
-            self.after(0, lambda: self.btn_ejecutar_ataque.configure(
-                state="normal", 
-                text="LANZAR ATAQUE", 
-                fg_color="#990000"
-            ))
-
-    def detener_ataque(self):
-        """Mata los procesos de red y mueve los logs capturados al proyecto."""
-        self.consola.insert("end", "\n[!] Deteniendo servicios de red...\n")
-        
-        # [FIX 4] Además de responder, tumbamos dnsmasq explícitamente desde la GUI
-        os.system("sudo pkill -f responder")
-        os.system("sudo pkill -f dnsmasq")
-        os.system("sudo fuser -k 80/tcp 2>/dev/null")
-        os.system("sudo fuser -k 445/tcp 2>/dev/null")
-        
-        ruta_proyecto = os.path.dirname(os.path.abspath(__file__))
-        ruta_logs_local = os.path.join(ruta_proyecto, "logs")
-        
-        self.consola.insert("end", "[*] Sincronizando reportes de credenciales...\n")
-        os.system(f"sudo mv /usr/share/responder/logs/* {ruta_logs_local}/ 2>/dev/null")
-        
-        self.consola.insert("end", "[OK] Procesos detenidos y logs guardados en el proyecto.\n")
-        
-        self.btn_ejecutar_ataque.configure(state="normal", text="LANZAR ATAQUE", fg_color="#990000")
-        self.btn_detener_ataque.configure(state="disabled", fg_color="#444444")
-
-    def abrir_visor_logs(self):
-        """Función auxiliar para el botón de logs."""
-        if hasattr(self, 'consola'):
-            self.consola.insert("end", "[*] Mostrando reportes locales activos...\n")
-            self.consola.see("end")
-
-    def abrir_visor_logs(self):
-        """Lee los archivos de texto de la carpeta logs local y los muestra en la consola."""
-        if not hasattr(self, 'consola'):
-            return
-
-        ruta_proyecto = os.path.dirname(os.path.abspath(__file__))
-        ruta_logs = os.path.join(ruta_proyecto, "logs")
-        
-        self.consola.insert("end", "\n[*] Buscando reportes de hashes locales...\n")
-        self.consola.see("end")
-
-        if not os.path.exists(ruta_logs) or not os.listdir(ruta_logs):
-            self.consola.insert("end", "[!] No se encontraron archivos de logs en la carpeta del proyecto.\n")
-            self.consola.see("end")
-            return
-
-        # Buscamos todos los archivos .txt o .log en la carpeta
-        archivos = [os.path.join(ruta_logs, f) for f in os.listdir(ruta_logs) if f.endswith(('.txt', '.log'))]
-
-        if not archivos:
-            self.consola.insert("end", "[!] Carpeta localizada, pero no hay archivos de texto (.txt/.log) todavía.\n")
-            self.consola.see("end")
-            return
-
-        # Ordenamos para abrir el archivo modificado más recientemente
-        archivo_reciente = max(archivos, key=os.path.getmtime)
-        nombre_archivo = os.path.basename(archivo_reciente)
-
-        self.consola.insert("end", f"[+] Mostrando contenido de: {nombre_archivo}\n")
-        self.consola.insert("end", "="*50 + "\n")
-        
-        try:
-            with open(archivo_reciente, "r", encoding="utf-8", errors="ignore") as f:
-                contenido = f.read()
-                if contenido.strip():
-                    self.consola.insert("end", contenido)
-                else:
-                    self.consola.insert("end", "[vacio] El archivo de log está registrado pero no contiene texto aún.\n")
-        except Exception as e:
-            self.consola.insert("end", f"[ERROR] No se pudo leer el archivo: {e}\n")
-            
-        self.consola.insert("end", "\n" + "="*50 + "\n")
-        self.consola.see("end")
-
 
     # ==========================================
     # MENÚ UTILIDADES 
