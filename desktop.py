@@ -1,4 +1,5 @@
 import customtkinter as ctk
+from customtkinter import filedialog 
 import subprocess
 import threading
 import os
@@ -139,8 +140,9 @@ class RedTeamApp(ctk.CTk):
         self.btn_nmap = self.crear_boton_menu("1. Reconocimiento", self.show_recon_menu, 2)
         self.btn_mac = self.crear_boton_menu("2. MAC Changer", self.show_mac_menu, 3)
         self.btn_wifi = self.crear_boton_menu("3. Auditoría WiFi", self.show_wifi_menu, 4)
-        self.btn_jammer = self.crear_boton_menu("4. NRF24 Jammer", self.show_nrf_jammer_menu, 5)
-        self.btn_utils = self.crear_boton_menu("5. Utilidades OS", self.show_utils_menu, 6)
+        self.btn_cracking = self.crear_boton_menu("4. Cracking WPA", self.show_cracking_menu, 5)
+        self.btn_jammer = self.crear_boton_menu("5. NRF24 Jammer", self.show_nrf_jammer_menu, 6)
+        self.btn_utils = self.crear_boton_menu("6. Utilidades OS", self.show_utils_menu, 7)
 
         # Frame principal (scrollable)
         self.main_frame = ctk.CTkScrollableFrame(self, corner_radius=15, fg_color=COLOR_FONDO_PRINCIPAL)
@@ -2002,6 +2004,118 @@ if __name__ == "__main__":
             threading.Thread(target=_fetch, daemon=True).start()
         else:
             self.escribir_consola("[!] Gadget desconectado.")
+
+    # ==========================================
+    # MENÚ CRACKING (Ataque de Diccionario)
+    # ==========================================
+    def show_cracking_menu(self):
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(self.show_inicio_menu)
+        ctk.CTkLabel(self.main_frame, text="CRACKING WPA - SELECCIONAR AUDITORÍA", 
+                     font=ctk.CTkFont(size=20, weight="bold")).pack(pady=(10, 5))
+
+        # Reutilizamos BASE_DIR_WIFI ya que ahí se guardan los handshakes
+        if not os.path.exists(BASE_DIR_WIFI):
+            os.makedirs(BASE_DIR_WIFI)
+            
+        carpetas = sorted([d for d in os.listdir(BASE_DIR_WIFI) if os.path.isdir(os.path.join(BASE_DIR_WIFI, d))], reverse=True)
+        
+        if not carpetas:
+            ctk.CTkLabel(self.main_frame, text="No hay capturas de handshake guardadas.", text_color="#aaaaaa").pack(pady=20)
+            return
+
+        frame = ctk.CTkScrollableFrame(self.main_frame, height=300)
+        frame.pack(fill="both", expand=True, padx=20, pady=10)
+        
+        for carpeta in carpetas:
+            ruta = os.path.join(BASE_DIR_WIFI, carpeta)
+            btn = ctk.CTkButton(frame, text=carpeta, fg_color="#2b2b2b", hover_color=COLOR_BOTON_HOVER,
+                               command=lambda r=ruta: self._cracking_seleccionar_cap(r))
+            btn.pack(fill="x", pady=3)
+            
+        self.mostrar_consola()
+
+    def _cracking_seleccionar_cap(self, ruta_carpeta):
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(self.show_cracking_menu)
+        nombre = os.path.basename(ruta_carpeta)
+        
+        ctk.CTkLabel(self.main_frame, text=f"SELECCIONAR ARCHIVO .CAP", 
+                     font=ctk.CTkFont(size=18, weight="bold")).pack(pady=10)
+        ctk.CTkLabel(self.main_frame, text=f"Carpeta: {nombre}", text_color="#aaaaaa").pack(pady=(0, 10))
+
+        archivos_cap = sorted([f for f in os.listdir(ruta_carpeta) if f.endswith('.cap')])
+        
+        if not archivos_cap:
+            ctk.CTkLabel(self.main_frame, text="No se encontraron archivos .cap en esta ubicación.", text_color="#aaaaaa").pack(pady=20)
+            return
+
+        frame = ctk.CTkScrollableFrame(self.main_frame, height=300)
+        frame.pack(fill="both", expand=True, padx=20, pady=10)
+        
+        for archivo in archivos_cap:
+            ruta_arch = os.path.join(ruta_carpeta, archivo)
+            btn = ctk.CTkButton(frame, text=archivo, fg_color=COLOR_BOTON_ROJO, hover_color=COLOR_BOTON_HOVER,
+                               command=lambda ra=ruta_arch: self._cracking_configurar_ataque(ra))
+            btn.pack(fill="x", pady=5)
+            
+        self.mostrar_consola()
+
+    def _cracking_configurar_ataque(self, ruta_cap):
+        self.limpiar_main_frame()
+        # El botón de retroceso nos lleva a la vista anterior pasando el directorio padre del archivo actual
+        self.agregar_boton_atras(lambda: self._cracking_seleccionar_cap(os.path.dirname(ruta_cap)))
+        
+        ctk.CTkLabel(self.main_frame, text="CONFIGURAR ATAQUE DE DICCIONARIO", 
+                     font=ctk.CTkFont(size=18, weight="bold")).pack(pady=10)
+        
+        ctk.CTkLabel(self.main_frame, text=f"Objetivo: {os.path.basename(ruta_cap)}", text_color="#ff4d4d").pack(pady=5)
+
+        # Contenedor para el explorador del diccionario
+        dicc_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
+        dicc_frame.pack(fill="x", padx=20, pady=20)
+        
+        ctk.CTkLabel(dicc_frame, text="Ruta del Diccionario:").pack(side="left", padx=(0, 10))
+        
+        # Diccionario por defecto (Kali Linux standard)
+        var_dicc = ctk.StringVar(value="/usr/share/wordlists/rockyou.txt")
+        entry_dicc = ctk.CTkEntry(dicc_frame, textvariable=var_dicc, width=350)
+        entry_dicc.pack(side="left", padx=5)
+
+        def abrir_explorador():
+            ruta = filedialog.askopenfilename(title="Seleccionar Diccionario", 
+                                              filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")])
+            if ruta:
+                var_dicc.set(ruta)
+
+        btn_explorar = ctk.CTkButton(dicc_frame, text="Examinar...", width=80, 
+                                     fg_color="#4a4a4a", hover_color="#2b2b2b", 
+                                     command=abrir_explorador)
+        btn_explorar.pack(side="left", padx=5)
+
+        # Botón de ejecución final
+        btn_iniciar = ctk.CTkButton(self.main_frame, text="INICIAR FUERZA BRUTA", 
+                                    fg_color=COLOR_BOTON_PELIGRO, hover_color="#cc7a00", height=40,
+                                    command=lambda: self._cracking_ejecutar(ruta_cap, var_dicc.get()))
+        btn_iniciar.pack(fill="x", padx=40, pady=10)
+
+        self.mostrar_consola()
+
+    def _cracking_ejecutar(self, ruta_cap, ruta_dicc):
+        if not os.path.exists(ruta_dicc):
+            self.escribir_consola(f"\n[!] ERROR: El diccionario no existe en la ruta especificada:\n{ruta_dicc}")
+            return
+            
+        self.escribir_consola(f"\n[*] Preparando ataque automatizado con aircrack-ng...")
+        self.escribir_consola(f"[*] Diccionario : {ruta_dicc}")
+        self.escribir_consola(f"[*] Archivo CAP : {ruta_cap}")
+        
+        # Al igual que en opt2.sh, disparamos el comando. 
+        # NOTA: No necesitamos pasar el -b (BSSID) porque la captura ya está segmentada.
+        cmd = ["sudo", "aircrack-ng", "-w", ruta_dicc, ruta_cap]
+        
+        # Ejecutamos con la función segura existente, pasando use_shell=False para listas
+        self.ejecutar_comando(cmd, use_shell=False)
 
 if __name__ == "__main__":
     app = RedTeamApp()
