@@ -2063,7 +2063,6 @@ if __name__ == "__main__":
 
     def _cracking_configurar_ataque(self, ruta_cap):
         self.limpiar_main_frame()
-        # El botón de retroceso nos lleva a la vista anterior pasando el directorio padre del archivo actual
         self.agregar_boton_atras(lambda: self._cracking_seleccionar_cap(os.path.dirname(ruta_cap)))
         
         ctk.CTkLabel(self.main_frame, text="CONFIGURAR ATAQUE DE DICCIONARIO", 
@@ -2077,7 +2076,6 @@ if __name__ == "__main__":
         
         ctk.CTkLabel(dicc_frame, text="Ruta del Diccionario:").pack(side="left", padx=(0, 10))
         
-        # Diccionario por defecto (Kali Linux standard)
         var_dicc = ctk.StringVar(value="/usr/share/wordlists/rockyou.txt")
         entry_dicc = ctk.CTkEntry(dicc_frame, textvariable=var_dicc, width=350)
         entry_dicc.pack(side="left", padx=5)
@@ -2093,11 +2091,21 @@ if __name__ == "__main__":
                                      command=abrir_explorador)
         btn_explorar.pack(side="left", padx=5)
 
-        # Botón de ejecución final
-        btn_iniciar = ctk.CTkButton(self.main_frame, text="INICIAR FUERZA BRUTA", 
+        # ==========================================
+        # NUEVO: Contenedor y lógica de botones de control
+        # ==========================================
+        botones_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
+        botones_frame.pack(fill="x", padx=40, pady=10)
+        
+        self.btn_iniciar_crack = ctk.CTkButton(botones_frame, text="INICIAR FUERZA BRUTA", 
                                     fg_color=COLOR_BOTON_PELIGRO, hover_color="#cc7a00", height=40,
                                     command=lambda: self._cracking_ejecutar(ruta_cap, var_dicc.get()))
-        btn_iniciar.pack(fill="x", padx=40, pady=10)
+        self.btn_iniciar_crack.pack(side="left", fill="x", expand=True, padx=(0, 5))
+
+        self.btn_detener_crack = ctk.CTkButton(botones_frame, text="DETENER ATAQUE", 
+                                    fg_color="#333333", state="disabled", height=40,
+                                    command=self._cracking_detener)
+        self.btn_detener_crack.pack(side="left", fill="x", expand=True, padx=(5, 0))
 
         self.mostrar_consola()
 
@@ -2106,17 +2114,41 @@ if __name__ == "__main__":
             self.escribir_consola(f"\n[!] ERROR: El diccionario no existe en la ruta especificada:\n{ruta_dicc}")
             return
             
+        # 1. Bloqueamos Iniciar y Habilitamos Detener
+        self.btn_iniciar_crack.configure(state="disabled", fg_color="#333333")
+        self.btn_detener_crack.configure(state="normal", fg_color=COLOR_BOTON_PELIGRO, hover_color="#cc7a00")
+
         self.escribir_consola(f"\n[*] Preparando ataque automatizado con aircrack-ng...")
         self.escribir_consola(f"[*] Diccionario : {ruta_dicc}")
         self.escribir_consola(f"[*] Archivo CAP : {ruta_cap}")
         
-        # Al igual que en opt2.sh, disparamos el comando. 
-        # NOTA: No necesitamos pasar el -b (BSSID) porque la captura ya está segmentada.
         cmd = ["sudo", "aircrack-ng", "-w", ruta_dicc, ruta_cap]
         
-        # Ejecutamos con la función segura existente, pasando use_shell=False para listas
-        self.ejecutar_comando(cmd, use_shell=False)
+        # 2. Función de limpieza que se llamará al terminar o abortar
+        def on_finish():
+            try:
+                # Restauramos los botones a su estado original si la interfaz sigue abierta
+                if hasattr(self, 'btn_iniciar_crack') and self.btn_iniciar_crack.winfo_exists():
+                    self.btn_iniciar_crack.configure(state="normal", fg_color=COLOR_BOTON_PELIGRO)
+                if hasattr(self, 'btn_detener_crack') and self.btn_detener_crack.winfo_exists():
+                    self.btn_detener_crack.configure(state="disabled", fg_color="#333333")
+            except Exception:
+                pass
 
+        # Ejecutamos con la función existente. Cuando el proceso termine, on_finish restablecerá los botones.
+        self.ejecutar_comando(cmd, callback_after=on_finish, use_shell=False)
+
+    def _cracking_detener(self):
+        """Detiene de forma forzosa el proceso de aircrack-ng."""
+        self.escribir_consola("\n[!] Abortando el ataque de fuerza bruta...")
+        
+        # Deshabilitamos el botón detener para evitar clics múltiples mientras se cierra
+        self.btn_detener_crack.configure(state="disabled", fg_color="#333333")
+        
+        # Matamos el proceso aircrack-ng. Esto lanzará la señal de término al subprocess.Popen 
+        # dentro de ejecutar_comando(), el cual invocará automáticamente a on_finish().
+        subprocess.run(["sudo", "pkill", "aircrack-ng"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        
 if __name__ == "__main__":
     app = RedTeamApp()
     app.mainloop()
