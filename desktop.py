@@ -1845,7 +1845,7 @@ if __name__ == "__main__":
         """Verifica o restablece la conexión aislando la UI de los hilos."""
         msg = None
         try:
-            from gadget_handler import BLEGadget
+            from modules.gadget_handler import BLEGadget
             if self.gadget is None:
                 self.gadget = BLEGadget()
             elif force_reconnect or not self.gadget.is_available():
