@@ -107,6 +107,9 @@ class RedTeamApp(ctk.CTk):
         self.wifi_state = {}
         self.navigation_stack = []  # Pila para volver atrás en menús dinámicos
 
+        self.gadget = None
+        self.gadget_available = False
+
         # --- NUEVO: Referencias a procesos para Evil Twin ---
         self.evil_twin_procs = {
             'hostapd': None,
@@ -136,7 +139,8 @@ class RedTeamApp(ctk.CTk):
         self.btn_nmap = self.crear_boton_menu("1. Reconocimiento", self.show_recon_menu, 2)
         self.btn_mac = self.crear_boton_menu("2. MAC Changer", self.show_mac_menu, 3)
         self.btn_wifi = self.crear_boton_menu("3. Auditoría WiFi", self.show_wifi_menu, 4)
-        self.btn_utils = self.crear_boton_menu("4. Utilidades OS", self.show_utils_menu, 5)
+        self.btn_jammer = self.crear_boton_menu("4. NRF24 Jammer", self.show_nrf_jammer_menu, 5)
+        self.btn_utils = self.crear_boton_menu("5. Utilidades OS", self.show_utils_menu, 6)
 
         # Frame principal (scrollable)
         self.main_frame = ctk.CTkScrollableFrame(self, corner_radius=15, fg_color=COLOR_FONDO_PRINCIPAL)
@@ -173,8 +177,13 @@ class RedTeamApp(ctk.CTk):
         self.console_textbox.pack(fill="both", expand=True, padx=20, pady=(15, 20))
 
     def escribir_consola(self, texto):
-        self.console_textbox.insert("end", texto + "\n")
-        self.console_textbox.see("end")
+        try:
+            # Verifica si la consola realmente existe antes de intentar escribir
+            if hasattr(self, 'console_textbox') and self.console_textbox.winfo_exists():
+                self.console_textbox.insert("end", texto + "\n")
+                self.console_textbox.see("end")
+        except Exception:
+            pass # Ignora escrituras fantasma si la interfaz se está recargando
 
     def obtener_interfaces_red(self):
         try:
@@ -1824,6 +1833,175 @@ if __name__ == "__main__":
         for iface in interfaces:
             self.ejecutar_comando(f"hciconfig {iface} -a")
             self.ejecutar_comando(f"bluetoothctl -- show {iface}")
+
+
+    # ==========================================
+    # MENÚ BLUETOOTH / NRF24 JAMMER 
+    # ==========================================
+
+    def _ensure_gadget(self, force_reconnect=False):
+        """Verifica o restablece la conexión aislando la UI de los hilos."""
+        msg = None
+        try:
+            from gadget_handler import BLEGadget
+            if self.gadget is None:
+                self.gadget = BLEGadget()
+            elif force_reconnect or not self.gadget.is_available():
+                self.gadget.reconnect()
+                
+            self.gadget_available = self.gadget.is_available()
+            if self.gadget_available:
+                msg = "[+] Gadget NRF24 conectado y listo."
+        except Exception as e:
+            self.gadget = None
+            self.gadget_available = False
+            msg = f"[!] Error inicializando gadget: {e}"
+            
+        # Devolvemos el mensaje en lugar de forzar la impresión asíncrona
+        return self.gadget_available, msg
+
+    def show_nrf_jammer_menu(self):
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(self.show_inicio_menu)
+        ctk.CTkLabel(self.main_frame, text="NRF24 JAMMER", font=ctk.CTkFont(size=20, weight="bold")).pack(pady=(10,5))
+        
+        loading_lbl = ctk.CTkLabel(self.main_frame, text="Detectando puerto USB...", text_color="#aaaaaa")
+        loading_lbl.pack(pady=20)
+        
+        self.mostrar_consola() # Inicializa consola temporal para evitar crash visual
+
+        def async_check():
+            connected, msg = self._ensure_gadget(force_reconnect=True)
+            self.after(0, lambda: self._build_nrf_interface(connected, msg))
+
+        threading.Thread(target=async_check, daemon=True).start()
+
+    def _build_nrf_interface(self, connected, msg=None):
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(self.show_inicio_menu)
+        ctk.CTkLabel(self.main_frame, text="NRF24 JAMMER", font=ctk.CTkFont(size=20, weight="bold")).pack(pady=10)
+
+        status_txt = "Conectado" if connected else "Desconectado"
+        status_clr = "#00ff00" if connected else "#ff4d4d"
+        
+        ctk.CTkLabel(self.main_frame, text=f"Estado: {status_txt}", 
+                     text_color=status_clr, font=ctk.CTkFont(size=14, weight="bold")).pack(pady=(2, 10))
+
+        if connected:
+            self.btn_nrf_start = ctk.CTkButton(self.main_frame, text="Activar Jamming", 
+                                               fg_color=COLOR_BOTON_ROJO, hover_color=COLOR_BOTON_HOVER, height=40,
+                                               command=self._nrf_start)
+            self.btn_nrf_start.pack(fill="x", padx=40, pady=5)
+            
+            self.btn_nrf_stop = ctk.CTkButton(self.main_frame, text="Detener Jamming", 
+                                              fg_color=COLOR_BOTON_PELIGRO, hover_color="#cc7a00", height=40,
+                                              command=self._nrf_stop)
+            self.btn_nrf_stop.pack(fill="x", padx=40, pady=5)
+            
+            self.btn_nrf_status = ctk.CTkButton(self.main_frame, text="Consultar Estado", 
+                                                fg_color="#4a4a4a", hover_color="#2b2b2b", height=40,
+                                                command=self._nrf_status)
+            self.btn_nrf_status.pack(fill="x", padx=40, pady=5)
+            
+            self.btn_nrf_reconnect = ctk.CTkButton(self.main_frame, text="Reconectar / Reset", 
+                                                   fg_color="#4a4a4a", hover_color="#2b2b2b", height=40,
+                                                   command=self._async_reconnect)
+            self.btn_nrf_reconnect.pack(fill="x", padx=40, pady=5)
+            
+            self._nrf_bloquear_botones(atacando=False)
+            
+        else:
+            ctk.CTkLabel(self.main_frame, text="Conecta el ESP32 por USB.", text_color="#aaaaaa").pack(pady=5)
+            ctk.CTkButton(self.main_frame, text="Buscar Dispositivo", fg_color=COLOR_BOTON_ROJO, 
+                          hover_color=COLOR_BOTON_HOVER, height=40, command=self._async_reconnect).pack(fill="x", padx=40, pady=5)
+
+        # Reconstruye la consola final y LUEGO imprime los mensajes
+        self.mostrar_consola()
+        if msg:
+            self.escribir_consola(msg)
+
+    def _async_reconnect(self):
+        self.escribir_consola("[*] Buscando dispositivo...")
+        def do_reconnect():
+            connected, msg = self._ensure_gadget(force_reconnect=True)
+            if not connected and not msg:
+                msg = "[!] No se detectó el hardware."
+            self.after(0, lambda: self._build_nrf_interface(connected, msg))
+            
+        threading.Thread(target=do_reconnect, daemon=True).start()
+
+
+    def _nrf_bloquear_botones(self, atacando):
+        """Lógica para desactivar/activar botones dependiendo del estado del ataque"""
+        if not hasattr(self, 'btn_nrf_start') or not self.btn_nrf_start.winfo_exists():
+            return
+            
+        if atacando:
+            # Bloquear Activar, Estado y Reconectar
+            self.btn_nrf_start.configure(state="disabled", fg_color="#333333")
+            self.btn_nrf_status.configure(state="disabled", fg_color="#333333")
+            self.btn_nrf_reconnect.configure(state="disabled", fg_color="#333333")
+            # Habilitar Detener
+            self.btn_nrf_stop.configure(state="normal", fg_color=COLOR_BOTON_PELIGRO)
+        else:
+            # Restaurar colores originales y habilitar botones
+            self.btn_nrf_start.configure(state="normal", fg_color=COLOR_BOTON_ROJO)
+            self.btn_nrf_status.configure(state="normal", fg_color="#4a4a4a")
+            self.btn_nrf_reconnect.configure(state="normal", fg_color="#4a4a4a")
+            # Bloquear botón detener
+            self.btn_nrf_stop.configure(state="disabled", fg_color="#333333")
+
+    def _nrf_start(self):
+        if self.gadget and self.gadget.is_available():
+            self.escribir_consola("[*] Iniciando barrido RF continuo...")
+            self._nrf_bloquear_botones(atacando=True)  # Activa el bloqueo visual en la UI
+            
+            def run():
+                try:
+                    success = self.gadget.sweep_jam(0, 0)
+                    if success:
+                        self.after(0, lambda: self.escribir_consola("[+] Jamming activado."))
+                    else:
+                        self.after(0, lambda: self.escribir_consola("[!] Sin confirmación del Gadget."))
+                        # Si falló, deshacer el bloqueo
+                        self.after(0, lambda: self._nrf_bloquear_botones(atacando=False))
+                except Exception as e:
+                    self.after(0, lambda e=e: self.escribir_consola(f"[!] Error: {e}"))
+                    self.after(0, lambda: self._nrf_bloquear_botones(atacando=False))
+            threading.Thread(target=run, daemon=True).start()
+        else:
+            self.escribir_consola("[!] Gadget desconectado. Pulsa 'Buscar'.")
+
+    def _nrf_stop(self):
+        if self.gadget and self.gadget.is_available():
+            self.escribir_consola("[*] Deteniendo transmisiones...")
+            # Bloquear botón de detener inmediatamente para evitar dobles clics
+            self.btn_nrf_stop.configure(state="disabled", fg_color="#333333")
+            
+            def run():
+                try:
+                    self.gadget.stop(0)
+                    self.after(0, lambda: self.escribir_consola("[+] Transmisión detenida."))
+                    self.after(0, lambda: self._nrf_bloquear_botones(atacando=False))  # Restaurar todos los botones
+                except Exception as e:
+                    self.after(0, lambda e=e: self.escribir_consola(f"[!] Error: {e}"))
+                    # Si falló el detener, rehabilitarlo para otro intento
+                    self.after(0, lambda: self.btn_nrf_stop.configure(state="normal", fg_color=COLOR_BOTON_PELIGRO))
+            threading.Thread(target=run, daemon=True).start()
+        else:
+            self.escribir_consola("[!] Gadget desconectado.")
+
+    def _nrf_status(self):
+        if self.gadget and self.gadget.is_available():
+            def _fetch():
+                try:
+                    st = self.gadget.status()
+                    self.after(0, lambda s=st: self.escribir_consola(f"[+] Estado ESP32: {s}"))
+                except Exception as e:
+                    self.after(0, lambda e=e: self.escribir_consola(f"[!] Error: {e}"))
+            threading.Thread(target=_fetch, daemon=True).start()
+        else:
+            self.escribir_consola("[!] Gadget desconectado.")
 
 if __name__ == "__main__":
     app = RedTeamApp()
