@@ -182,6 +182,17 @@ class RedTeamApp(ctk.CTk):
         except Exception:
             return ["wlan0", "eth0"]
 
+    def obtener_ip_local(self):
+        """Detecta automáticamente la IP local activa. Retorna 127.0.0.1 si no hay red."""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except Exception:
+            return "127.0.0.1"
+
     # ==========================================
     # FUNCIÓN DE VALIDACIÓN DE IP/CIDR (NUEVA)
     # ==========================================
@@ -393,8 +404,9 @@ class RedTeamApp(ctk.CTk):
     # MENÚ RECONOCIMIENTO (NMAP) - MODIFICADO
     # ==========================================
     def show_recon_menu(self):
-        self.session_dir_nmap = ""   # <--- NUEVO: resetea la sesión cada vez que se entra
+        self.session_dir_nmap = ""   
         self.limpiar_main_frame()
+        self.agregar_boton_atras(self.show_inicio_menu)
         ctk.CTkLabel(self.main_frame, text="RECONOCIMIENTO E INTELIGENCIA", 
                      font=ctk.CTkFont(size=20, weight="bold")).pack(pady=(10,5))
         
@@ -412,7 +424,7 @@ class RedTeamApp(ctk.CTk):
         ctk.CTkButton(config_frame, text="Actualizar", width=80, fg_color=COLOR_BOTON_ROJO,
                      command=lambda: self.escribir_consola(f"[+] Target actualizado: {self.obtener_target() or 'Inválido'}")).pack(side="left", padx=10)
 
-        # Opciones de escaneo Nmap (MODIFICADO: T4 -> T3, sin min-rate)
+        # Opciones de escaneo Nmap
         btn_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
         btn_frame.pack(fill="x", padx=15, pady=10)
         btn_frame.grid_columnconfigure((0,1), weight=1)
@@ -433,34 +445,85 @@ class RedTeamApp(ctk.CTk):
             ("12. Automatizado", f"-sn {{TARGET}} -oN {{SESSION}}/12a_discovery.txt && nmap -sS -p- -T3 {{TARGET}} -oN {{SESSION}}/12b_ports.txt && nmap -sV -sC {{TARGET}} -oN {{SESSION}}/12c_services.txt")
         ]
 
+        # Lista para almacenar las referencias y bloquear los botones durante los escaneos
+        self.nmap_botones_lista = []
+
         for i, (nombre, cmd) in enumerate(comandos_nmap):
             row = i // 2
             col = i % 2
             btn = ctk.CTkButton(btn_frame, text=nombre, fg_color=COLOR_BOTON_ROJO, hover_color=COLOR_BOTON_HOVER,
                                command=lambda c=cmd: self._ejecutar_nmap(c))
             btn.grid(row=row, column=col, padx=5, pady=5, sticky="ew")
+            self.nmap_botones_lista.append({"widget": btn, "color": COLOR_BOTON_ROJO})
+
+        # Botón para detener el escaneo
+        self.btn_detener_nmap = ctk.CTkButton(self.main_frame, text="DETENER ESCANEO", 
+                                              fg_color="#333333", state="disabled",
+                                              command=self._detener_nmap)
+        self.btn_detener_nmap.pack(pady=(10, 5))
 
         # Botón explorador de resultados
-        ctk.CTkButton(self.main_frame, text="EXPLORAR RESULTADOS GUARDADOS", 
+        btn_explorar = ctk.CTkButton(self.main_frame, text="EXPLORAR RESULTADOS GUARDADOS", 
                      fg_color="#4a4a4a", hover_color="#2b2b2b", height=40,
-                     command=self._mostrar_explorador_nmap).pack(pady=15)
+                     command=self._mostrar_explorador_nmap)
+        btn_explorar.pack(pady=(5, 15))
+        self.nmap_botones_lista.append({"widget": btn_explorar, "color": "#4a4a4a"})
 
+        # PRIMERO CREAMOS LA CONSOLA (Para que exista el widget 'console_textbox')
         self.mostrar_consola()
+
+        # AHORA DETECTAMOS LA IP Y ESCRIBIMOS EN LA CONSOLA
+        if self.target_ip.get() == "127.0.0.1" or not self.target_ip.get():
+            ip_detectada = self.obtener_ip_local()
+            self.target_ip.set(ip_detectada)  # Esto actualizará automáticamente la cajita de texto (Entry)
+            if ip_detectada != "127.0.0.1":
+                self.escribir_consola(f"[*] Red detectada automáticamente: {ip_detectada}")
+
     def _ejecutar_nmap(self, cmd_template):
         target = self.obtener_target()
         if target is None:
             self.escribir_consola("[!] Target inválido. No se ejecutará el comando.")
             return
 
-        # --- NUEVO: usar misma carpeta durante toda la sesión de Reconocimiento ---
+        # 1. Bloquear los botones de la interfaz
+        for item in self.nmap_botones_lista:
+            try:
+                item["widget"].configure(state="disabled", fg_color="#333333")
+            except Exception: pass
+            
+        # 2. Habilitar el botón de detener
+        try:
+            self.btn_detener_nmap.configure(state="normal", fg_color=COLOR_BOTON_PELIGRO, hover_color="#cc7a00")
+        except Exception: pass
+
         if not self.session_dir_nmap:
             timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
             self.session_dir_nmap = os.path.join(BASE_DIR_NMAP, f"Auditoria-{timestamp}")
-        # -----------------------------------------------------------------------
 
-        os.makedirs(self.session_dir_nmap, exist_ok=True)   # Asegura que la carpeta exista
+        os.makedirs(self.session_dir_nmap, exist_ok=True)
         comando = cmd_template.replace("{TARGET}", target).replace("{SESSION}", self.session_dir_nmap)
-        self.ejecutar_comando(f"nmap {comando}")
+
+        # 3. Función que se ejecutará al terminar
+        def on_finish():
+            for item in getattr(self, 'nmap_botones_lista', []):
+                try:
+                    item["widget"].configure(state="normal", fg_color=item["color"])
+                except Exception: pass
+            
+            try:
+                if hasattr(self, 'btn_detener_nmap') and self.btn_detener_nmap.winfo_exists():
+                    self.btn_detener_nmap.configure(state="disabled", fg_color="#333333")
+            except Exception: pass
+
+        self.ejecutar_comando(f"nmap {comando}", callback_after=on_finish)
+
+    def _detener_nmap(self):
+        """Detiene de forma forzosa el escaneo de Nmap en curso."""
+        self.escribir_consola("\n[!] Deteniendo proceso Nmap en curso...")
+        # Matamos el proceso subyacente. Esto hará que self.ejecutar_comando() reciba 
+        # la señal de fin, lance el "on_finish" y la interfaz se desbloquee automáticamente.
+        subprocess.run(["sudo", "pkill", "nmap"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+   
     def _mostrar_explorador_nmap(self):
         self.limpiar_main_frame()
         self.agregar_boton_atras(self.show_recon_menu)
