@@ -2022,7 +2022,7 @@ if __name__ == "__main__":
         """Verifica o restablece la conexión aislando la UI de los hilos."""
         msg = None
         try:
-            from gadget_handler import BLEGadget
+            from modules.gadget_handler import BLEGadget
             if self.gadget is None:
                 self.gadget = BLEGadget()
             elif force_reconnect or not self.gadget.is_available():
@@ -2186,7 +2186,7 @@ if __name__ == "__main__":
 
     def _import_ducky_logic(self):
         if not hasattr(self, '_ducky_logic'):
-            import ducky_logic
+            from modules import ducky_logic
             self._ducky_logic = ducky_logic
         return self._ducky_logic
 
@@ -2210,7 +2210,7 @@ if __name__ == "__main__":
             time.sleep(2)
             # En lugar de bloquear la GUI usando el módulo importado, ejecutamos 
             # la misma lógica vía subproceso para atrapar todo el output y tener un proceso matable.
-            script_cmd = f"import ducky_logic; ducky_logic.ejecutar_script_ducky('{ruta}', layout='{layout_seleccionado}')"
+            script_cmd = f"from modules import ducky_logic; ducky_logic.ejecutar_script_ducky('{ruta}', layout='{layout_seleccionado}')"
             comando = ["sudo", "python3", "-c", script_cmd]
             
             try:
@@ -2437,7 +2437,7 @@ if __name__ == "__main__":
     def accion_boton_lanzar_poison(self):
         import threading
         from datetime import datetime
-        import network_modules.poison_logic as poison_logic
+        import modules.poison_logic as poison_logic
 
         # Intercambio de botones
         self.btn_ejecutar_poison.config(style='Gray.TButton')
