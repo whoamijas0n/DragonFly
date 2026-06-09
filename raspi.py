@@ -83,52 +83,14 @@ ARTE_DRAGON = """
 
 
 # ==========================================
-# PALETA DE COLORES — Cyberdeck Flat Design v2
+# CONFIGURACION VISUAL PRO (Red Team Theme)
 # ==========================================
-
-# Fondos (jerarquía de 3 niveles)
-COLOR_FONDO_BASE      = "#0c0c0c"   # Ventana raíz, sidebar
-COLOR_FONDO_PRINCIPAL = "#141414"   # Contenido principal
-COLOR_FONDO_CARD      = "#1f1f1f"   # Paneles / cards / menús de lista
-COLOR_FONDO_ELEVADO   = "#272727"   # Dropdowns, overlays
-
-# Rojos operacionales
-COLOR_BOTON_ROJO      = "#cc0a0a"   # +20% luminancia vs original → TFT-safe
-COLOR_BOTON_HOVER     = "#900008"   # Pressed / active
-COLOR_ROJO_BRIGHT     = "#ff2222"   # Solo indicadores: alertas, cursor
-
-# Naranja — warning / peligro
-COLOR_BOTON_PELIGRO       = "#d97700"
-COLOR_BOTON_PELIGRO_HOVER = "#b36200"
-
-# Grises — botones neutros / secundarios
-COLOR_BOTON_GRIS       = "#2c2c2c"
-COLOR_BOTON_GRIS_HOVER = "#1c1c1c"
-
-# Textos
-COLOR_TEXTO_PRIMARIO    = "#e2e2e2"   # Texto principal (sin blanco puro)
-COLOR_TEXTO_SECUNDARIO  = "#787878"   # Subtítulos, labels dimmed
-COLOR_TEXTO_TERMINAL    = "#ff3333"   # Output de consola
-COLOR_TEXTO_EXITO       = "#33cc66"   # Mensajes [+]
-COLOR_TEXTO_ADVERTENCIA = "#ffaa00"   # Mensajes [!]
-
-# Bordes / separadores
-COLOR_BORDE_SUTIL  = "#282828"
-COLOR_BORDE_ACTIVO = "#cc0a0a"
-
-# Alias de compatibilidad — no rompe referencias existentes
-COLOR_FONDO_SIDEBAR = COLOR_FONDO_BASE
-
-# ==========================================
-# JERARQUÍA TIPOGRÁFICA — Courier monoespaciado
-# ==========================================
-FONT_TITLE  = ('Lexend', 11, 'bold')  # Cabecera de pantalla
-FONT_BODY   = ('Lexend',  9        )  # Texto general / botones de lista
-FONT_BODY_B = ('Lexend',  9, 'bold')  # Botones de acción / valores relevantes
-FONT_SMALL  = ('Lexend',  8        )  # Labels secundarios, status bar
-FONT_MICRO  = ('Lexend',  7        )  # Etiquetas de card, timestamps
-
-
+COLOR_FONDO_SIDEBAR = "#111111"
+COLOR_FONDO_PRINCIPAL = "#1a1a1a"
+COLOR_BOTON_ROJO = "#a60000"
+COLOR_BOTON_HOVER = "#6b0000"
+COLOR_TEXTO_TERMINAL = "#ff4d4d"
+COLOR_BOTON_PELIGRO = "#ff9900"
 
 # Directorios base para resultados
 BASE_DIR_NMAP = "Resultados_Nmap"
@@ -136,179 +98,6 @@ BASE_DIR_WIFI = "Resultados_Handshake"
 BASE_DIR_EVIL = "Resultados_EvilTwin"
 BASE_DIR_BLE = "Resultados_BLE"
 BASE_DIR_POISON = "Resultados_Poison" 
-
-
-# ==========================================
-# HELPERS DE ESTILO Y LAYOUT
-# ==========================================
-
-def aplicar_estilos(style: ttk.Style) -> None:
-        # ── FRAMES ──────────────────────────────────────────────────────────────
-        style.configure('TFrame',
-            background=COLOR_FONDO_PRINCIPAL, borderwidth=0)
-        style.configure('Dark.TFrame',
-            background=COLOR_FONDO_PRINCIPAL, borderwidth=0)
-        style.configure('Card.TFrame',
-            background=COLOR_FONDO_CARD, borderwidth=0)
-
-        # ── LABELS ──────────────────────────────────────────────────────────────
-        style.configure('TLabel',
-            background=COLOR_FONDO_PRINCIPAL, foreground=COLOR_TEXTO_PRIMARIO,
-            font=FONT_BODY, borderwidth=0)
-        style.configure('Dark.TLabel',
-            background=COLOR_FONDO_PRINCIPAL, foreground=COLOR_TEXTO_PRIMARIO,
-            font=FONT_BODY, borderwidth=0)
-        style.configure('Title.TLabel',
-            background=COLOR_FONDO_PRINCIPAL, foreground=COLOR_ROJO_BRIGHT,
-            font=FONT_TITLE, borderwidth=0)
-        style.configure('Gray.TLabel',
-            background=COLOR_FONDO_PRINCIPAL, foreground=COLOR_TEXTO_SECUNDARIO,
-            font=FONT_SMALL, borderwidth=0)
-        style.configure('Mono.TLabel',
-            background=COLOR_FONDO_PRINCIPAL, foreground=COLOR_TEXTO_TERMINAL,
-            font=FONT_BODY_B, borderwidth=0)
-        style.configure('Card.TLabel',
-            background=COLOR_FONDO_CARD, foreground=COLOR_TEXTO_PRIMARIO,
-            font=FONT_BODY, borderwidth=0)
-
-        # ── BOTÓN BASE ───────────────────────────────────────────────────────────
-        style.configure('TButton', borderwidth=0, relief='flat', padding=(8, 6))
-        style.map('TButton',
-            background=[('active',  COLOR_BOTON_HOVER)],
-            bordercolor=[('focus',  COLOR_BORDE_ACTIVO)],
-            focuscolor =[('focus',  COLOR_BORDE_ACTIVO)])
-
-        # ── RED BUTTON ───────────────────────────────────────────────────────────
-        style.configure('Red.TButton',
-            background=COLOR_BOTON_ROJO, foreground='white', relief='flat',
-            font=FONT_BODY_B, bordercolor=COLOR_BOTON_ROJO,
-            focuscolor=COLOR_BORDE_ACTIVO, borderwidth=1, focusthickness=2,
-            padding=(8, 10))
-        style.map('Red.TButton',
-            background=[('pressed', '#660005'), ('active', COLOR_BOTON_HOVER)],
-            foreground=[('pressed', '#cccccc'), ('active', 'white')],
-            bordercolor=[('focus', COLOR_ROJO_BRIGHT), ('active', COLOR_BOTON_HOVER)],
-            relief=[('pressed', 'flat')])
-
-        # ── GRAY BUTTON ──────────────────────────────────────────────────────────
-        style.configure('Gray.TButton',
-            background=COLOR_BOTON_GRIS, foreground=COLOR_TEXTO_PRIMARIO,
-            relief='flat', font=FONT_BODY, bordercolor=COLOR_BOTON_GRIS,
-            focuscolor='#555555', borderwidth=1, focusthickness=1, padding=(8, 9))
-        style.map('Gray.TButton',
-            background=[('pressed', '#0f0f0f'), ('active', COLOR_BOTON_GRIS_HOVER)],
-            foreground=[('pressed', '#888888'), ('active', COLOR_TEXTO_PRIMARIO)],
-            bordercolor=[('focus', '#555555')])
-
-        # ── DANGER BUTTON ────────────────────────────────────────────────────────
-        style.configure('Danger.TButton',
-            background=COLOR_BOTON_PELIGRO, foreground='#0c0c0c', relief='flat',
-            font=FONT_BODY_B, bordercolor=COLOR_BOTON_PELIGRO,
-            focuscolor=COLOR_BOTON_PELIGRO, borderwidth=1, focusthickness=1,
-            padding=(8, 9))
-        style.map('Danger.TButton',
-            background=[('pressed', '#8a4a00'), ('active', COLOR_BOTON_PELIGRO_HOVER)],
-            foreground=[('pressed', '#cccccc')])
-
-        # ── MENU BUTTON ──────────────────────────────────────────────────────────
-        style.configure('Menu.TButton',
-            background=COLOR_FONDO_CARD, foreground=COLOR_TEXTO_PRIMARIO,
-            relief='flat', font=FONT_BODY, bordercolor=COLOR_BORDE_SUTIL,
-            focuscolor=COLOR_BORDE_ACTIVO, borderwidth=1, focusthickness=1,
-            padding=(10, 9), anchor='w')
-        style.map('Menu.TButton',
-            background=[('pressed', COLOR_BOTON_ROJO), ('active', '#282828')],
-            foreground=[('pressed', 'white'), ('active', COLOR_TEXTO_PRIMARIO)],
-            bordercolor=[('focus', COLOR_BORDE_ACTIVO), ('active', '#3a3a3a')])
-
-        # ── APP ICON BUTTON ──────────────────────────────────────────────────────
-        style.configure('AppIcon.TButton',
-            background=COLOR_FONDO_PRINCIPAL, foreground=COLOR_TEXTO_PRIMARIO,
-            relief='flat', font=('Courier', 8, 'bold'), borderwidth=0,
-            padding=(4, 6))
-        style.map('AppIcon.TButton',
-            background=[('pressed', COLOR_BOTON_ROJO), ('active', '#282828')],
-            foreground=[('pressed', 'white'), ('active', COLOR_TEXTO_PRIMARIO)])
-
-        # ── SCROLLBAR ────────────────────────────────────────────────────────────
-        style.configure('Dark.Vertical.TScrollbar',
-            background='#2a2a2a', troughcolor=COLOR_FONDO_PRINCIPAL,
-            bordercolor=COLOR_FONDO_PRINCIPAL, arrowcolor='#555555',
-            arrowsize=18, relief='flat')
-        style.map('Dark.Vertical.TScrollbar',
-            background=[('active', COLOR_BOTON_ROJO), ('pressed', COLOR_BOTON_HOVER)],
-            arrowcolor=[('active', 'white')])
-
-        # ── CHECKBUTTON ──────────────────────────────────────────────────────────
-        style.configure('Dark.TCheckbutton',
-            background=COLOR_FONDO_PRINCIPAL, foreground=COLOR_TEXTO_PRIMARIO,
-            indicatorcolor='#2c2c2c', focuscolor='none', font=FONT_BODY,
-            borderwidth=0)
-        style.map('Dark.TCheckbutton',
-            indicatorcolor=[('selected', COLOR_BOTON_ROJO), ('active', COLOR_BOTON_HOVER)],
-            foreground=[('active', 'white')])
-
-        # ── ENTRY ────────────────────────────────────────────────────────────────
-        style.configure('Dark.TEntry',
-            fieldbackground='#1a1a1a', foreground=COLOR_TEXTO_PRIMARIO,
-            insertcolor=COLOR_ROJO_BRIGHT, bordercolor=COLOR_BORDE_SUTIL,
-            focuscolor=COLOR_BORDE_ACTIVO, padding=5, borderwidth=1,
-            relief='flat', font=FONT_BODY)
-        style.map('Dark.TEntry',
-            bordercolor=[('focus', COLOR_BORDE_ACTIVO), ('hover', '#3a3a3a')],
-            fieldbackground=[('focus', '#1e1e1e')])
-
-        # ── MENUBUTTON (Dropdown) ─────────────────────────────────────────────────
-        style.configure('Dark.TMenubutton',
-            background=COLOR_BOTON_ROJO, foreground='white',
-            bordercolor=COLOR_BORDE_ACTIVO, relief='flat', arrowcolor='white',
-            font=FONT_BODY, padding=(8, 6))
-        style.map('Dark.TMenubutton',
-            background=[('active', COLOR_BOTON_HOVER)],
-            arrowcolor=[('active', 'white')])
-
-
-def crear_card(parent, titulo: str = None,
-                color_borde: str = COLOR_BORDE_SUTIL) -> tk.Frame:
-        """Pseudo-card con borde de 1 px. Retorna el inner_frame para colocar widgets."""
-        border_frame = tk.Frame(parent, bg=color_borde, padx=1, pady=1)
-        border_frame.pack(fill='x', padx=4, pady=3)
-        inner_frame = tk.Frame(border_frame, bg=COLOR_FONDO_CARD)
-        inner_frame.pack(fill='both', expand=True)
-        if titulo:
-            tk.Frame(inner_frame, bg=COLOR_BOTON_ROJO, height=2).pack(fill='x')
-            tk.Label(inner_frame, text=f" {titulo.upper()}",
-                    bg=COLOR_FONDO_CARD, fg=COLOR_TEXTO_SECUNDARIO,
-                    font=FONT_MICRO, anchor='w').pack(fill='x', padx=4, pady=(2, 0))
-            tk.Frame(inner_frame, bg=COLOR_BORDE_SUTIL, height=1).pack(fill='x')
-        return inner_frame
-
-
-def crear_separador(parent, color: str = COLOR_BORDE_SUTIL,
-                        padx: int = 6, pady: int = 4) -> None:
-        """Línea horizontal de 1 px para separar secciones visualmente."""
-        tk.Frame(parent, bg=color, height=1).pack(fill='x', padx=padx, pady=pady)
-
-
-def crear_statusbar(root_app) -> tuple:
-        """
-        Barra HUD de 14 px anclada al fondo de la ventana principal.
-        Retorna: (bar_frame, lbl_ip, lbl_iface)
-        """
-        bar = tk.Frame(root_app, bg=COLOR_FONDO_BASE, height=14)
-        bar.pack(fill='x', side='bottom')
-        bar.pack_propagate(False)
-        lbl_ip = tk.Label(bar, text=" [NET] ---.---.---",
-                        bg=COLOR_FONDO_BASE, fg=COLOR_TEXTO_SECUNDARIO,
-                        font=FONT_MICRO, anchor='w')
-        lbl_ip.pack(side='left', padx=2)
-        lbl_iface = tk.Label(bar, text="--- ●",
-                            bg=COLOR_FONDO_BASE, fg=COLOR_TEXTO_EXITO,
-                            font=FONT_MICRO, anchor='e')
-        lbl_iface.pack(side='right', padx=2)
-        return bar, lbl_ip, lbl_iface
-
-
 
 # ==========================================
 # CLASE SCROLLABLE FRAME (Táctil optimizado)
@@ -417,7 +206,6 @@ class ScrollableFrame(tk.Frame):
             warning_label.pack(fill='x', padx=5, pady=2)
             return
         widget.pack(**pack_options)
-
 
 
 class TecladoNumerico(tk.Toplevel):
@@ -617,12 +405,101 @@ class RedTeamApp(tk.Tk):
         # Ajustar la geometría al tamaño de la pantalla y permitir redimensión
         self.geometry(f"{screen_width}x{screen_height}")
         self.resizable(True, True)
-      
-        # Estilos ttk — delegados a función centralizada
+
+        # Estilos ttk completamente oscuros (sin bordes blancos)
+
+        
         style = ttk.Style()
         style.theme_use('clam')
-        aplicar_estilos(style)
- 
+
+        style.configure('TFrame', background=COLOR_FONDO_PRINCIPAL, borderwidth=0)
+        style.configure('TLabel', background=COLOR_FONDO_PRINCIPAL, foreground='white',
+                        font=('Helvetica', 10), borderwidth=0)
+        style.configure('TButton', borderwidth=0, relief='flat')
+        style.map('TButton',
+                  background=[('active', COLOR_BOTON_HOVER)],
+                  bordercolor=[('focus', '#a60000')],
+                  focuscolor=[('focus', '#a60000')])
+
+        style.configure('Dark.TFrame', background=COLOR_FONDO_PRINCIPAL, borderwidth=0)
+        style.configure('Dark.TLabel', background=COLOR_FONDO_PRINCIPAL, foreground='white',
+                        font=('Helvetica', 10), borderwidth=0)
+        style.configure('Title.TLabel', background=COLOR_FONDO_PRINCIPAL, foreground='#ff4d4d',
+                        font=('Helvetica', 12, 'bold'), borderwidth=0)
+        style.configure('Gray.TLabel', background=COLOR_FONDO_PRINCIPAL, foreground='#aaaaaa',
+                        font=('Helvetica', 10), borderwidth=0)
+
+        style.configure('Dark.TMenubutton', background=COLOR_BOTON_ROJO, foreground='white',
+                bordercolor='#a60000', relief='flat', arrowcolor='white',
+                font=('Helvetica', 10))
+        style.map('Dark.TMenubutton',
+                background=[('active', COLOR_BOTON_HOVER)],
+                arrowcolor=[('active', 'white')])
+
+        # --- NUEVO: Estilo para la barra de desplazamiento (Scrollbar) táctil ---
+        style.configure('Dark.Vertical.TScrollbar',
+                        background='#333333',
+                        troughcolor=COLOR_FONDO_PRINCIPAL,
+                        bordercolor=COLOR_FONDO_PRINCIPAL,
+                        arrowcolor='white',
+                        arrowsize=20,  # Aumenta el grosor para mantenerlo "touch-friendly"
+                        relief='flat')
+        style.map('Dark.Vertical.TScrollbar',
+                  background=[('active', COLOR_BOTON_ROJO), ('pressed', COLOR_BOTON_HOVER)],
+                  arrowcolor=[('active', 'white')])
+        
+        # Estilo para botones con iconos (App Launcher Style)
+        style.configure('AppIcon.TButton', background=COLOR_FONDO_PRINCIPAL, foreground='white',
+                        relief='flat', font=('Helvetica', 9, 'bold'), borderwidth=0)
+        style.map('AppIcon.TButton',
+                  background=[('active', COLOR_BOTON_HOVER)],
+                  bordercolor=[('focus', COLOR_FONDO_PRINCIPAL)])
+
+
+
+        style.configure('Red.TButton', background=COLOR_BOTON_ROJO, foreground='white',
+                        relief='flat', font=('Helvetica', 10, 'bold'),
+                        bordercolor=COLOR_BOTON_ROJO, focuscolor=COLOR_BOTON_ROJO,
+                        borderwidth=1, focusthickness=1)
+        style.map('Red.TButton',
+                  background=[('active', COLOR_BOTON_HOVER)],
+                  bordercolor=[('focus', COLOR_BOTON_ROJO), ('active', COLOR_BOTON_HOVER)],
+                  focuscolor=[('focus', COLOR_BOTON_ROJO)])
+
+        style.configure('Gray.TButton', background='#4a4a4a', foreground='white',
+                        relief='flat', font=('Helvetica', 10),
+                        bordercolor='#4a4a4a', focuscolor='#777777',
+                        borderwidth=1, focusthickness=1)
+        style.map('Gray.TButton',
+                  background=[('active', '#2b2b2b')],
+                  bordercolor=[('focus', '#777777')])
+
+        style.configure('Danger.TButton', background=COLOR_BOTON_PELIGRO, foreground='black',
+                        relief='flat', font=('Helvetica', 10, 'bold'),
+                        bordercolor=COLOR_BOTON_PELIGRO, focuscolor=COLOR_BOTON_PELIGRO,
+                        borderwidth=1, focusthickness=1)
+        style.map('Danger.TButton',
+                  background=[('active', '#cc7a00')],
+                  bordercolor=[('focus', COLOR_BOTON_PELIGRO)])
+
+        style.configure('Dark.TCheckbutton', background=COLOR_FONDO_PRINCIPAL,
+                        foreground='white', indicatorcolor='#a60000',
+                        focuscolor='none', borderwidth=0)
+        style.map('Dark.TCheckbutton',
+                  indicatorcolor=[('selected', '#a60000')])
+
+        style.configure('Dark.TEntry', fieldbackground='#333333', foreground='white',
+                        insertcolor='white', bordercolor='#a60000',
+                        borderwidth=1, relief='flat')
+
+        style.configure('Dark.TOptionMenu', background=COLOR_BOTON_ROJO,
+                        foreground='white', bordercolor='#a60000',
+                        borderwidth=1)
+
+        style.configure('Dark.TMenubutton', background=COLOR_BOTON_ROJO, foreground='white',
+                bordercolor='#a60000', relief='flat', arrowcolor='white', font=('Helvetica', 10))
+        style.map('Dark.TMenubutton', background=[('active', COLOR_BOTON_HOVER)], arrowcolor=[('active', 'white')])
+
         # Fullscreen
         def aplicar_kiosco():
             self.attributes('-fullscreen', True)
@@ -979,17 +856,9 @@ class RedTeamApp(tk.Tk):
             # El parámetro sticky="nsew" asegura que el botón se expanda para rellenar toda la celda táctil
             btn.grid(row=fila, column=columna, padx=padding_celda, pady=padding_celda, sticky="nsew")
 
-            # --- REEMPLAZAR CON ESTO ---
             # Configuración de pesos para garantizar la elasticidad proporcional de las filas y columnas
             grid_frame.grid_columnconfigure(columna, weight=1)
             grid_frame.grid_rowconfigure(fila, weight=1)
-
-        # Barra de estado HUD — se crea solo la primera vez (persiste entre navegaciones)
-        if not hasattr(self, '_bar') or not self._bar.winfo_exists():
-            self._bar, self._lbl_ip, self._lbl_iface = crear_statusbar(self)
-        self._lbl_ip.config(text=f" [{self.obtener_ip_local()}]")
-        if self.interfaz_seleccionada.get():
-            self._lbl_iface.config(text=f"{self.interfaz_seleccionada.get()} ●")
 
     # ==========================================
     # MENÚ RECONOCIMIENTO (NMAP) 
