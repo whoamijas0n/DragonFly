@@ -102,7 +102,7 @@ COLOR_BOTON_PELIGRO       = "#d97700"
 COLOR_BOTON_PELIGRO_HOVER = "#b36200"
 
 # Grises — botones neutros / secundarios
-COLOR_BOTON_GRIS       = "#2c2c2c"
+COLOR_BOTON_GRIS       = "#2e2d2d"
 COLOR_BOTON_GRIS_HOVER = "#1c1c1c"
 
 # Textos
@@ -122,11 +122,11 @@ COLOR_FONDO_SIDEBAR = COLOR_FONDO_BASE
 # ==========================================
 # JERARQUÍA TIPOGRÁFICA — Courier monoespaciado
 # ==========================================
-FONT_TITLE  = ('Courier', 11, 'bold')  # Cabecera de pantalla
-FONT_BODY   = ('Courier',  9        )  # Texto general / botones de lista
-FONT_BODY_B = ('Courier',  9, 'bold')  # Botones de acción / valores relevantes
-FONT_SMALL  = ('Courier',  9        )  # Labels secundarios, status bar
-FONT_MICRO  = ('Courier',  9        )  # Etiquetas de card, timestamps
+FONT_TITLE  = ('Courier', 13, 'bold')  # Cabecera de pantalla
+FONT_BODY   = ('Courier',  11        )  # Texto general / botones de lista
+FONT_BODY_B = ('Courier',  11, 'bold')  # Botones de acción / valores relevantes
+FONT_SMALL  = ('Courier',  10        )  # Labels secundarios, status bar
+FONT_MICRO  = ('Courier',  10        )  # Etiquetas de card, timestamps
 
 
 
