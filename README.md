@@ -129,7 +129,7 @@ Módulo central de auditoría inalámbrica. Agrupa cinco flujos de ataque/análi
 - **Desautenticación**: envía paquetes deauth dirigidos a un cliente o en broadcast contra un BSSID objetivo.
 - **Explorar Handshakes / Explorar Evil Twin**: navegador de archivos integrado para revisar capturas y credenciales de sesiones anteriores.
 
-#### 4. Gadget BLE
+#### 4. Gadget NRF24 JAMMER
 
 Interfaz de control para el hardware externo Blue-Fly (ESP32). La aplicación detecta automáticamente el puerto serie (`/dev/ttyACM*`, `/dev/ttyUSB*`) y sincroniza con el firmware esperando el mensaje `Gadget listo`. Si el dispositivo se desconecta durante la sesión, el módulo gestiona la reconexión automática sin bloquear la interfaz gráfica. Las funciones disponibles son: iniciar Sweep Jam, detener la interferencia y consultar el estado activo del módulo.
 
