@@ -58,7 +58,7 @@ El entorno de ejecución recomendado es el siguiente:
 | Placa | Raspberry Pi Zero 2 WH |
 | Alimentación | Batería PiSugar 3 (o compatible) |
 | Pantalla | Pantalla táctil resistiva/capacitiva de 2.4" (320x240) |
-| Sistema Operativo | Raspberry Pi OS 32-bits con entorno gráfico (Legacy o Bookworm Desktop) |
+| Sistema Operativo | Raspberry Pi OS 32-bits lite (sin entorno grafico) |
 
 
 
@@ -137,14 +137,28 @@ Interfaz de control para el hardware externo Blue-Fly (ESP32). La aplicación de
 
 Ejecuta scripts de inyección de pulsaciones a través del dispositivo HID USB configurado (`/dev/hidg0`). El módulo lista automáticamente todos los archivos `.txt` contenidos en la carpeta `payloads/` y permite ejecutarlos con un toque. Antes de ejecutar cualquier payload, espera 2 segundos para que el operador posicione el cursor en el sistema objetivo.
 
-#### 6. Utilidades OS
+#### 6. Ataque Poison (Envenenamiento de Red USB)
 
-Conjunto de herramientas de soporte operacional:
+Módulo diseñado para interceptar tráfico emulando un adaptador Ethernet sobre USB (ataque estilo PoisonTap). Para utilizarlo, la Raspberry Pi debe estar configurada previamente en el modo de red adecuado desde el menú de Utilidades OS (RNDIS para víctimas Windows o CDC ECM para Mac/Linux). 
 
-- Cambio de interfaz USB (Host/Gadget) con reinicio controlado.
-- Gestión de interfaces de red y estado del sistema.
-- Escáner y gestor de conexiones Bluetooth.
-- Herramientas de diagnóstico de conectividad.
+La interfaz permite gestionar el ciclo de vida del ataque subyacente (ejecutado a través de `poison_logic.py`):
+- **Lanzar Ataque**: Inicia la instancia de envenenamiento en la interfaz `usb0`, delegando la manipulación de red y captura de tráfico a la lógica del backend.
+- **Detener Ataque**: Finaliza los procesos de intercepción de manera segura, limpia las reglas de red y guarda la sesión.
+- **Explorar Logs**: Abre el navegador de archivos integrado apuntando a `Resultados_Poison/`, permitiendo revisar las carpetas de sesión (generadas con marca temporal) y leer directamente los registros capturados desde la interfaz táctil.
+
+#### 7. Utilidades OS
+
+Conjunto de herramientas de soporte operacional, ampliado para gestionar los nuevos perfiles de hardware y conexiones de red de forma nativa:
+
+- **Cambio de Perfil USB**: Permite reconfigurar el puerto OTG de la Pi Zero con reinicio controlado. Opciones disponibles:
+  - **Modo Host**: Para conectar antenas Wi-Fi externas o periféricos.
+  - **Rubber Ducky (HID)**: Emula un teclado USB.
+  - **Poison (Red USB)**: Despliega un submenú para elegir entre el perfil de red para **Windows (RNDIS)** o **Mac/Linux (CDC ECM)**.
+- **Gestor de Redes Wi-Fi**: Escaneo de redes, conexión táctil (con teclado alfanumérico emergente) y gestión de redes previamente guardadas mediante `nmcli`.
+- **Gestor Bluetooth**: Escaneo, emparejamiento y conexión a dispositivos Bluetooth directamente desde la GUI utilizando `bluetoothctl`.
+- **Sistema**: Monitoreo de almacenamiento, RAM, uso de CPU, conexiones activas, actualización del sistema (APT) y opciones de energía (Reiniciar/Apagar).
+
+
 
 ---
 
@@ -240,15 +254,18 @@ ENTER
 ```
 
 ---
+### Cambio de Interfaz USB: Host, HID y Red (Poison)
 
-### Cambio de Interfaz USB: Host vs. Gadget
+La Pi Zero 2 W dispone de un único puerto USB OTG. La suite aprovecha el framework `libcomposite` y el subsistema `configfs` del kernel para reescribir dinámicamente los descriptores USB, permitiendo que la placa asuma diferentes identidades ante el ordenador víctima. Modificar este comportamiento requiere un reinicio completo del sistema, proceso que la GUI automatiza.
 
-La Pi Zero 2 W dispone de un único puerto USB OTG que puede operar en dos modos excluyentes:
+Los perfiles disponibles desde el menú "Utilidades OS" son:
 
-- **Modo Host**: la Pi actúa como controladora USB, permitiendo conectar dispositivos externos como antenas Wi-Fi USB o teclados.
-- **Modo Gadget (HID)**: la Pi se anuncia al ordenador anfitrión como un teclado USB estándar, habilitando la ejecución de payloads Rubber Ducky a través de `/dev/hidg0`.
+- **Modo Host (`dr_mode=host`)**: La Pi actúa como controladora, habilitando el uso de tarjetas de red inalámbricas externas o hubs USB.
+- **Modo Gadget HID (Rubber Ducky)**: Emula un teclado USB genérico (`idVendor=0x1d6b`, `idProduct=0x0104`). Habilita el dispositivo `/dev/hidg0` para la inyección de pulsaciones del módulo Ducky.
+- **Modo Gadget de Red RNDIS (Poison - Windows)**: Emula un adaptador de red compatible con el protocolo NDIS remoto de Microsoft (`idVendor=0x0525`, `idProduct=0xa4a2`). Presenta al host víctima un dispositivo "DragonFly RNDIS Ethernet".
+- **Modo Gadget de Red CDC ECM (Poison - Mac/Linux)**: Emula un adaptador de red estándar CDC ECM (`idVendor=0x0525`, `idProduct=0xa4a1`). El script de generación (`usb_gadget.sh`) está programado para asignar una **dirección MAC aleatoria** (`HOST_MAC`) en cada inicialización. Esto es una contramedida crítica para evitar que gestores de red estrictos (como NetworkManager en distribuciones Linux modernas) bloqueen o ignoren la interfaz tras múltiples conexiones.
 
-Cambiar entre ambos modos requiere modificar la configuración del kernel y recargar los módulos del sistema, lo que hace necesario un reinicio completo del dispositivo. Esta operación está disponible desde el menú "Utilidades OS" y muestra una advertencia antes de ejecutarse. Es la razón por la que el flujo de instalación para la versión Raspi incluye un paso dedicado a configurar el gadget HID al inicio del sistema.
+*Nota técnica: Al seleccionar un perfil de Gadget, la aplicación genera dinámicamente el script `/usr/local/bin/usb_gadget.sh` con los descriptores precisos, lo enlaza mediante un servicio `systemd` (`usb_gadget.service`) de ejecución única (oneshot) y reconfigura las superposiciones del kernel en `/boot/firmware/config.txt` antes de reiniciar.*
 
 ---
 
@@ -260,25 +277,41 @@ Cambiar entre ambos modos requiere modificar la configuración del kernel y reca
 
 ### Descripción Técnica
 
-La edición de escritorio está adaptada para laptops o placas Raspberry Pi más potentes (Pi 4, Pi 5) que ejecuten Kali Linux con entorno gráfico. La GUI utiliza `customtkinter` en lugar del `tkinter` nativo, proporcionando widgets modernos con bordes redondeados y una estética dark más refinada. La ventana arranca en modo pantalla completa con topmost activo, presentando un sidebar fijo con los módulos de navegación en la columna izquierda y un panel de contenido scrollable en la columna derecha.
+La edición de escritorio está adaptada para entornos de escritorio convencionales, estaciones de trabajo o placas de alto rendimiento. A diferencia de la versión para Raspberry Pi, esta variante es completamente multiplataforma dentro del ecosistema Linux, siendo compatible con **Kali Linux, Parrot OS, Debian, Ubuntu, Arch Linux, Manjaro y Fedora**. Esta amplia compatibilidad es posible gracias al script de autoinstalación unificado (`install_desktop.sh`), el cual automatiza por completo la detección del entorno de ejecución y el despliegue correlativo de dependencias (proceso que se detallará de forma minuciosa en las siguientes secciones).
+
+La interfaz gráfica está construida utilizando `customtkinter`, lo que proporciona widgets modernos, bordes redondeados y una estética *Dark Mode* refinada. La ventana arranca en modo pantalla completa con la propiedad *topmost* activa, presentando un *sidebar* fijo con los módulos de navegación a la izquierda y un panel de contenido con scroll interactivo a la derecha.
+
+Esta versión elimina intencionalmente los vectores de ataque físico y de proximidad (Rubber Ducky, PoisonTap, Bluetooth) que dependen del controlador USB OTG exclusivo de la Raspberry Pi Zero, enfocándose en el aprovechamiento de los recursos de hardware locales para la auditoría de redes inalámbricas y fuerza bruta offline.
 
 ### Diferencias respecto a la edición Raspberry Pi
 
-
-| Característica | Edición Raspi | Edición Desktop |
+| Característica | Edición Raspi (`raspi.py`) | Edición Desktop (`desktop.py`) |
 |---|---|---|
-| Framework GUI | `tkinter` nativo | `customtkinter` |
-| Navegación | Táctil, scroll por arrastre | Ratón y teclado estándar |
-| Layout | Menús apilados en panel único | Sidebar fijo + panel principal |
-| Cambio USB Host/Gadget | Disponible (hardware OTG) | No disponible (laptops estándar sin OTG) |
-| Teclados táctiles emergentes | Sí (numérico y alfanumérico) | No (se usa el teclado físico) |
-| Rubber Ducky | Requiere USB Gadget HID activo | Requiere adaptador USB HID externo compatible |
-| Integración BLE Gadget | Via USB serie | Via USB serie (mismo módulo `gadget_handler.py`) |
+| Framework GUI | `tkinter` nativo (Optimizado táctil) | `customtkinter` (Moderno, Dark Mode) |
+| Layout | Menús apilados en panel único | Sidebar lateral fijo + panel principal |
+| Rubber Ducky / PoisonTap | Soportado nativamente (Hardware OTG) | **No disponible** (hardware estándar sin OTG) |
+| Cracking WPA (Fuerza Bruta) | **No disponible** (Limitación de CPU) | **Soportado** (`aircrack-ng` + explorador de diccionarios) |
+| NRF24 Jammer (Blue-Fly) | Vía USB serie | Vía USB serie |
+| Cambio de Perfiles USB | Disponible (Host, Gadget, RNDIS, ECM) | No aplicable |
 
+---
 
-Las funcionalidades de Reconocimiento Nmap, MAC Changer, Auditoría WiFi, Evil Twin, Rubber Ducky y Gadget BLE operan de forma idéntica en cuanto a lógica y comandos subyacentes. La diferencia está en la interacción: en la edición desktop el operador usa la navegación estándar de ventanas, atajos de teclado y el ratón, sin los teclados emergentes táctiles ni la lógica de scroll por gestos.
+### Módulos Exclusivos y Modificaciones
 
-La barra lateral presenta los módulos numerados del 0 al 6 y permanece visible en todo momento, permitiendo saltar entre secciones sin necesidad de volver a un menú raíz. La consola de salida de comandos se muestra directamente en el panel principal con fuente monoespaciada y actualización en tiempo real.
+#### 1. Cracking WPA (Ataque de Diccionario)
+Aprovechando la potencia de CPU de una estación de trabajo, la versión de escritorio incluye un módulo dedicado para romper handshakes capturados previamente.
+- **Navegador de Capturas**: El operador selecciona la carpeta de la sesión dentro de `Resultados_Handshake/` y elige el archivo `.cap` objetivo.
+- **Explorador de Diccionarios**: Permite abrir un cuadro de diálogo del sistema (`filedialog`) para buscar diccionarios `.txt` personalizados, cargando por defecto `/usr/share/wordlists/rockyou.txt`.
+- **Ejecución Controlada**: Lanza `aircrack-ng` en un hilo separado mostrando el progreso de la fuerza bruta en la consola en tiempo real, con botones de bloqueo de seguridad para iniciar y detener el ataque forzosamente sin congelar la interfaz.
+
+#### 2. NRF24 Jammer Adaptado
+El control del gadget físico Blue-Fly (ESP32) se mantiene funcional. Se rediseñó la interfaz con los componentes de `customtkinter` para mostrar indicadores visuales de estado (Conectado en verde / Desconectado en rojo) y botones de acción rápida para iniciar o detener el barrido de radiofrecuencia en la banda de 2.4 GHz.
+
+#### 3. Utilidades OS Purificadas
+El módulo de utilidades se ha limpiado de todas las funciones exclusivas de la Pi Zero. Ahora se centra estrictamente en:
+- **Gestión Inalámbrica**: Escaneo y conexión a redes Wi-Fi a través de `nmcli`, solicitando contraseñas mediante pop-ups nativos (`CTkInputDialog`).
+- **Monitoreo de Recursos**: Botones de acceso rápido para consultar el almacenamiento (`df -h`), RAM (`free -h`), top de procesos por CPU y conexiones activas (`ss -tulnp`).
+- **Control de Energía**: Comandos directos para apagar o reiniciar la máquina.
 
 ---
 
