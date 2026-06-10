@@ -317,79 +317,430 @@ El módulo de utilidades se ha limpiado de todas las funciones exclusivas de la 
 
 <div align="center">
 
-
-## Instalación — `install.sh`
+## Instalación
 
 </div>
+
+El sistema DragonFly utiliza **dos instaladores independientes** ubicados en la carpeta `installers/`, uno para cada variante de la suite. La separación responde a que los entornos de ejecución son radicalmente diferentes: la edición Raspberry Pi se despliega sobre un sistema sin entorno gráfico (OS Lite) y requiere construir un modo kiosco desde cero, mientras que la edición de escritorio debe ser portable entre distribuciones y registrarse como un binario global del sistema.
+
+Ambos scripts comparten la misma lógica de detección de la ruta raíz del proyecto: al estar alojados dentro de `installers/`, resuelven automáticamente el directorio padre con `$(dirname "$0")/..`, por lo que **no es necesario moverlos ni copiarlos** antes de ejecutarlos.
 
 ### Clonar el repositorio
 
 ```bash
 git clone https://github.com/whoamijas0n/DragonFly.git
 cd DragonFly
-sudo ./install.sh
 ```
 
-El script requiere privilegios de root. Si se ejecuta con `sudo`, detecta automáticamente el usuario real mediante `$SUDO_USER` para aplicar la configuración de autostart en el directorio home correcto.
-
-### Opciones del menú de instalación
-
-
-| Opción | Descripción |
-|---|---|
-| 1) Instalación Completa | Ejecuta las tres fases en secuencia (Todo-en-Uno) |
-| 2) Solo Dependencias | Instala paquetes APT y librerías Python |
-| 3) Solo USB Gadget | Configura el script HID en `/usr/local/bin/usb_gadget.sh` |
-| 4) Solo Auto-Inicio | Crea la entrada `.desktop` de autostart y regla sudoers |
-| 5) Salir | Termina sin realizar cambios |
-
+A partir de aquí, el proceso de instalación diverge según el hardware de destino. Elige la sección correspondiente a continuación.
 
 ---
 
-### Flujo recomendado: Edición Raspberry Pi
+<div align="center">
 
-La instalación para la Pi Zero 2 W requiere las tres fases. Se recomienda ejecutarlas en el orden que ofrece la opción 1 (Todo-en-Uno) o manualmente en este orden:
+## Instalación — `installers/install_raspi.sh`
+### Edición Raspberry Pi OS Lite (Sin Entorno Gráfico)
 
-**Paso 1 — Dependencias (Opción 2)**
+</div>
 
-Instala todos los paquetes de sistema necesarios:
+### Descripción General
+
+Este instalador automatiza el despliegue completo de `raspi.py` sobre **Raspberry Pi OS 32-bits Lite**, una imagen sin entorno de escritorio preinstalado. A diferencia de la versión anterior (que dependía de LXDE y `lxterminal`), la nueva arquitectura construye un entorno gráfico minimalista propio basado en **X11 + Openbox** que arranca directamente en modo kiosco, sin barra de tareas, sin gestor de archivos y sin ningún proceso de escritorio innecesario que compita por los recursos de la Pi Zero 2 W.
+
+El modo kiosco se activa automáticamente en el arranque: la Pi realiza autologin en consola en `tty1` y lanza `startx`, que a su vez ejecuta `openbox` en segundo plano y arranca `raspi.py` como proceso principal del display. Si la aplicación se cierra, la sesión X termina con ella.
+
+El script debe ejecutarse con privilegios de root y detecta automáticamente el usuario real (incluso bajo `sudo`) a través de `$SUDO_USER`, de forma que todos los archivos de configuración del espacio de usuario (`.xinitrc`, `.profile`) se escriben en el directorio home correcto y con la propiedad correcta.
+
+```bash
+sudo ./installers/install_raspi.sh
+```
+
+---
+
+### Opciones del menú de instalación (`install_raspi.sh`)
+
+| Opción | Descripción |
+|---|---|
+| **1) Instalación Completa** | Ejecuta las cuatro fases en secuencia (Todo-en-Uno OS Lite). Recomendado para un despliegue limpio desde cero. |
+| **2) Solo Dependencias** | Instala únicamente los paquetes APT (sistema base, motor X11, herramientas de red y auditoría). |
+| **3) Solo USB Gadget** | Crea y registra el script `/usr/local/bin/usb_gadget.sh` con el descriptor HID de teclado. |
+| **4) Solo Entorno Kiosco y Sudoers** | Genera `.xinitrc`, configura la pantalla TFT, activa el autologin y escribe la regla `sudoers`. |
+| **5) Solo Responder** | Clona o actualiza el repositorio de Responder en `/opt/Responder` y genera sus certificados SSL. |
+| **6) Eliminar Instalación** | Deshace todas las acciones del instalador de forma selectiva, sin tocar los paquetes APT del sistema. |
+| **7) Salir** | Termina sin realizar cambios. |
+
+---
+
+### Flujo recomendado: Edición Raspberry Pi OS Lite
+
+La instalación para la Pi Zero 2 W comprende **cuatro fases**. Se recomienda ejecutarlas en el orden que ofrece la opción `1` (Todo-en-Uno) o de forma modular si se desea un despliegue más controlado.
+
+---
+
+#### Fase 1 — Dependencias del sistema (Opción 2)
+
+Actualiza los repositorios APT e instala todos los paquetes necesarios para que `raspi.py` opere con capacidades completas. El bloque de paquetes es significativamente más amplio que en la versión anterior, ya que ahora incluye el motor gráfico completo para construir el entorno X11 desde cero:
+
+**Paquetes de aplicación y auditoría:**
+```
+python3  python3-tk  python3-serial  python3-pil  python3-pil.imagetk
+python3-netifaces  python3-aioquic
+nmap  macchanger  aircrack-ng  hostapd  dnsmasq  iptables
+network-manager  bluez  rfkill
+git  openssl
+```
+
+**Motor gráfico X11 y controladores:**
+```
+xserver-xorg  xinit  x11-xserver-utils
+xserver-xorg-input-libinput  xserver-xorg-input-evdev
+openbox
+xfonts-base  xfonts-75dpi
+xserver-xorg-video-fbdev
+```
+
+> **Nota sobre `python3-aioquic` y `python3-netifaces`:** estas librerías se instalan directamente desde APT (sin `pip`) para garantizar la compatibilidad con la arquitectura ARMv7 de 32-bits del OS Lite, donde compilar extensiones C desde PyPI puede fallar por ausencia de herramientas de compilación.
+
+> **Nota sobre `lxterminal`:** la dependencia de `lxterminal` presente en la versión anterior ha sido eliminada. El nuevo modo kiosco no necesita un emulador de terminal, ya que `raspi.py` se ejecuta directamente como proceso X11 gestionado por Openbox.
+
+---
+
+#### Fase 2 — USB Gadget HID (Opción 3)
+
+Genera el script `/usr/local/bin/usb_gadget.sh` y lo hace ejecutable. Este script es invocado automáticamente por `raspi.py` cuando el operador activa el modo Rubber Ducky desde el menú de Utilidades OS.
+
+La lógica interna del script realiza las siguientes operaciones en orden:
+
+1. **Limpieza de gadget anterior:** si existe un gadget `g1` previo en `/sys/kernel/config/usb_gadget/`, desvincula su UDC, espera 1 segundo y elimina el árbol de directorios completo para partir siempre de un estado limpio.
+2. **Carga de módulos del kernel:** carga `libcomposite` y `usb_f_hid` explícitamente por si el sistema no los cargó aún.
+3. **Creación del descriptor USB:**
+   - `idVendor`: `0x1d6b` (Linux Foundation)
+   - `idProduct`: `0x0104` (Multifunction Composite Gadget)
+   - Fabricante declarado: `Raspberry Pi` / Producto: `Pi Zero HID Keyboard`
+4. **Registro del descriptor HID:** embebe el descriptor de reporte de teclado estándar (45 bytes, report length 8) directamente en `functions/hid.usb0/report_desc` sin depender de archivos externos.
+5. **Enlace y activación:** vincula la función HID a la configuración `c.1` y escribe el nombre del UDC activo (detectado dinámicamente con `ls /sys/class/udc | head -1`) en el archivo `UDC` para activar el gadget.
+
+> El script incluye una pausa de 2 segundos antes de la activación del UDC para permitir que el subsistema USB del kernel complete la enumeración del bus, evitando errores de inicialización intermitentes.
+
+---
+
+#### Fase 3 — Entorno Kiosco X11 y Permisos (Opción 4)
+
+Esta es la fase más diferente respecto al instalador anterior. En lugar de crear una entrada `.desktop` para LXDE, se construye un entorno de arranque gráfico mínimo desde cero. El proceso se divide en cinco sub-pasos:
+
+**3.1 — Archivo `.xinitrc`**
+
+Se genera `~/.xinitrc` en el home del usuario real. Este archivo es invocado por `startx` y define la sesión X completa:
+
+```sh
+xset -dpms        # Desactiva la gestión de energía del monitor (DPMS)
+xset s off        # Desactiva el protector de pantalla
+xset s noblank    # Impide que la pantalla se ponga en negro
+
+openbox &         # Lanza el gestor de ventanas en segundo plano
+
+# Ejecuta raspi.py como proceso principal de la sesión
+exec sudo /usr/bin/python3 /ruta/del/proyecto/raspi.py
+```
+
+Cuando `raspi.py` termina (por un apagado del sistema desde la propia GUI, por ejemplo), el `exec` hace que la sesión X se cierre junto con él, devolviendo el control a la consola en `tty1`.
+
+**3.2 — Configuración del framebuffer TFT (`99-fbdev.conf`)**
+
+Crea el archivo `/usr/share/X11/xorg.conf.d/99-fbdev.conf` para que Xorg use el framebuffer de la pantalla TFT conectada a la Pi (`/dev/fb1`) como dispositivo de vídeo principal, en lugar del HDMI:
 
 ```
-python3, python3-tk, python3-serial
-nmap, macchanger, aircrack-ng, hostapd, dnsmasq, iptables
-network-manager, bluez, rfkill, lxterminal
+Section "Device"
+    Identifier "TFT Screen"
+    Driver     "fbdev"
+    Option     "fbdev" "/dev/fb1"
+EndSection
 ```
 
-**Paso 2 — USB Gadget (Opción 3)**
+> Si tu pantalla TFT requiere una superposición específica en `/boot/firmware/config.txt` (por ejemplo, `dtoverlay=ili9341`), ese paso debe realizarse manualmente antes de instalar, ya que varía según el modelo exacto de pantalla.
 
-Crea el script `/usr/local/bin/usb_gadget.sh` que configura el descriptor HID de teclado en el subsistema `configfs` del kernel (`/sys/kernel/config/usb_gadget/g1`). El descriptor reporta al host anfitrión como un teclado HID estándar con report length de 8 bytes y el descriptor HID completo embebido. Este script debe ejecutarse antes de iniciar `raspi.py` para que `/dev/hidg0` esté disponible.
+**3.3 — Autologin en consola**
 
-**Paso 3 — Auto-Inicio (Opción 4)**
+Invoca `raspi-config nonint do_boot_behaviour B2` para configurar el modo de arranque **"Console Autologin"**, de forma que la Pi inicie sesión automáticamente en `tty1` con el usuario configurado sin requerir contraseña en la consola. Si `raspi-config` no está disponible en el sistema, esta sub-fase se omite con un aviso y debe configurarse manualmente (habitualmente editando el servicio `getty@tty1.service` con `systemd`).
 
-Crea la entrada `~/.config/autostart/raspy.desktop` para que LXDE/Openbox lance automáticamente `raspi.py` al iniciar el entorno gráfico, dentro de un terminal `lxterminal` con permisos sudo. Además, añade una regla `NOPASSWD` en `/etc/sudoers.d/010_dragonfly` para que el script pueda ejecutar comandos privilegiados sin solicitar contraseña, requisito indispensable para las funciones de red y HID.
+**3.4 — Disparo automático de `startx` desde `.profile`**
 
-Tras completar las tres fases, se recomienda reiniciar la Raspberry Pi para que todos los módulos del kernel y la configuración de autostart tomen efecto.
+Añade el siguiente bloque al final de `~/.profile` del usuario real:
+
+```bash
+# Iniciar entorno grafico para DragonFly automaticamente
+if [[ -z $DISPLAY ]] && [[ $(tty) = /dev/tty1 ]]; then
+    startx
+fi
+```
+
+Esta condición garantiza que `startx` solo se invoque cuando:
+- No existe una variable `$DISPLAY` activa (no hay sesión X ya corriendo).
+- El login ocurre específicamente en `tty1` (la consola del autologin).
+
+De este modo, las sesiones SSH o logins desde otras TTYs no intentarán lanzar X11.
+
+El instalador verifica antes de escribir si el bloque ya existe en `.profile` (comprobando la presencia de `startx`) para evitar duplicados en caso de re-ejecución del instalador.
+
+**3.5 — Regla `sudoers` sin contraseña**
+
+Escribe `/etc/sudoers.d/010_dragonfly` con los permisos correctos (`0440`):
+
+```
+<usuario> ALL=(ALL) NOPASSWD: /usr/bin/python3 /ruta/proyecto/raspi.py
+```
+
+Esta regla es necesaria porque `raspi.py` es lanzado desde `.xinitrc` con `sudo` y el entorno X11 no dispone de ningún agente de contraseñas. La regla se limita estrictamente al binario Python con la ruta exacta del proyecto, minimizando la superficie de exposición del `NOPASSWD`.
+
+---
+
+#### Fase 4 — Responder (Opción 5)
+
+Instala y configura **Responder** (herramienta de envenenamiento LLMNR/NBT-NS/mDNS) en `/opt/Responder`:
+
+1. **Clonado:** si `/opt/Responder` no existe, clona el repositorio oficial `https://github.com/lgandx/Responder.git`. Si ya existe (reinstalación), ejecuta `git pull` para actualizarlo al último commit disponible.
+2. **Permisos de directorio:** aplica `chmod -R 755` para garantizar que `raspi.py` pueda leer y ejecutar los scripts sin errores de permisos.
+3. **Generación de certificados SSL:** crea el directorio `/opt/Responder/certs/` y genera un certificado autofirmado RSA-2048 válido por 10 años de forma desatendida:
+   ```
+   /opt/Responder/certs/responder.key   (chmod 600 — solo root)
+   /opt/Responder/certs/responder.crt   (chmod 644 — lectura pública)
+   ```
+   El CN del certificado se establece en `DragonFly`. Estos certificados son utilizados por Responder para los módulos HTTPS y LDAPS, y deben existir antes de lanzarlo por primera vez.
+
+---
+
+#### Desinstalación (Opción 6)
+
+El proceso de desinstalación es **quirúrgico**: elimina únicamente los componentes que el instalador creó, preservando los paquetes APT instalados para evitar romper otras herramientas que el operador pueda tener en el sistema. Las acciones son:
+
+| Componente | Acción |
+|---|---|
+| `/opt/Responder` | Eliminado con `rm -rf` |
+| `/usr/local/bin/usb_gadget.sh` | Eliminado |
+| Gadget activo en `sysfs` | Desvinculado del UDC y eliminado de `/sys/kernel/config/usb_gadget/g1` |
+| `~/.xinitrc` | Eliminado |
+| `/usr/share/X11/xorg.conf.d/99-fbdev.conf` | Eliminado |
+| Bloque en `~/.profile` | Extraído limpiamente línea por línea con `awk` |
+| `/etc/sudoers.d/010_dragonfly` | Eliminado |
+| Paquetes APT | **No eliminados** (por diseño) |
+
+---
+
+### Primer arranque tras la instalación
+
+Tras completar las cuatro fases, se recomienda reiniciar:
+
+```bash
+sudo reboot
+```
+
+En el siguiente inicio, la secuencia completa es automática:
+
+```
+Encendido → Autologin en tty1 → .profile ejecuta startx
+→ .xinitrc configura X11 + Openbox → raspi.py arranca en pantalla completa
+```
+
+El operador verá directamente la interfaz táctil de DragonFly sin ninguna interacción manual.
+
+---
+
+<div align="center">
+
+## Instalación — `installers/install_desktop.sh`
+### Edición de Escritorio — Multiplataforma
+
+</div>
+
+### Descripción General
+
+Este instalador despliega `desktop.py` como una **aplicación de sistema** en cualquier distribución Linux de escritorio compatible. A diferencia de la edición Raspberry Pi (que opera en un entorno controlado con hardware fijo), la edición de escritorio está diseñada para ejecutarse en hardware heterogéneo, por lo que el instalador necesita gestionar gestores de paquetes y nombres de paquetes distintos según la distribución detectada.
+
+El proceso instala la aplicación en `/opt/dragonfly_desktop/`, crea un entorno virtual Python aislado dentro de ese directorio (evitando conflictos con el Python del sistema) y registra un ejecutable global en `/usr/local/bin/dragonfly-gui`. A partir de ese momento, la herramienta puede lanzarse desde cualquier directorio con un único comando.
+
+El instalador requiere privilegios de root:
+
+```bash
+sudo ./installers/install_desktop.sh
+```
+
+---
+
+### Distribuciones soportadas
+
+La autodetección de SO lee `/etc/os-release` y bifurca la instalación según el campo `$ID` o `$ID_LIKE`:
+
+| Distribución / Familia | Gestor de paquetes |
+|---|---|
+| Kali Linux | `apt-get` |
+| Parrot OS | `apt-get` |
+| Debian | `apt-get` |
+| Ubuntu (y derivados) | `apt-get` |
+| Arch Linux | `pacman` |
+| Manjaro | `pacman` |
+| Fedora (y derivados) | `dnf` |
+
+Si la distribución no encaja en ninguna de estas familias, el instalador muestra un mensaje de error y se detiene, solicitando al operador que instale las dependencias manualmente.
+
+---
+
+### Opciones del menú de instalación (`install_desktop.sh`)
+
+| Opción | Descripción |
+|---|---|
+| **1) Instalar DragonFly Desktop** | Ejecuta el flujo completo: dependencias → copia de archivos → venv → ejecutable global. |
+| **2) Desinstalar DragonFly Desktop** | Elimina `/opt/dragonfly_desktop` y el binario `/usr/local/bin/dragonfly-gui`. |
+| **3) Salir** | Termina sin realizar cambios. |
 
 ---
 
 ### Flujo recomendado: Edición Desktop
 
-Para laptops con Kali Linux, solo es necesaria la opción de dependencias:
-
-**Paso 1 — Dependencias (Opción 2)**
-
-El proceso es idéntico al descrito para Raspi. Una vez completado, la herramienta se lanza manualmente:
-
-```bash
-cd DragonFly
-sudo python3 desktop.py
-```
-
-No se configura autostart ni USB Gadget, ya que los portátiles estándar no disponen del controlador USB OTG necesario para emular un dispositivo HID. Si el operador dispone de un adaptador USB HID externo compatible, puede configurar el gadget manualmente y ajustar la variable `HID_DEVICE` en `ducky_logic.py` si la ruta del dispositivo difiere de `/dev/hidg0`.
+La instalación completa se realiza con la opción `1` y comprende **cuatro fases internas** que se ejecutan en secuencia automática.
 
 ---
 
+#### Fase 1 — Autodetección del sistema operativo e instalación de dependencias
+
+El script lee `/etc/os-release` e invoca el gestor de paquetes correspondiente. El conjunto de paquetes equivalente es el mismo en todas las distribuciones, aunque los nombres varían:
+
+**Paquetes instalados (nombres en Debian/Ubuntu/Kali):**
+```
+python3  python3-pip  python3-tk  python3-venv
+nmap  macchanger  aircrack-ng  hostapd  dnsmasq
+net-tools  iptables  bluez  x11-xserver-utils
+```
+
+**Equivalentes en Arch Linux:**
+```
+python  python-pip  tk
+nmap  macchanger  aircrack-ng  hostapd  dnsmasq
+net-tools  iptables-nft  bluez  bluez-utils  xorg-xhost
+```
+
+**Equivalentes en Fedora:**
+```
+python3  python3-pip  python3-tkinter
+nmap  macchanger  aircrack-ng  hostapd  dnsmasq
+net-tools  iptables  bluez  xhost
+```
+
+> **Nota sobre `python3-tk`:** en sistemas Debian/Ubuntu, el módulo `tkinter` es un paquete separado del intérprete Python. Su ausencia provoca un `ImportError` al iniciar `desktop.py` con un mensaje poco descriptivo. El instalador garantiza su presencia independientemente de la distribución.
+
+---
+
+#### Fase 2 — Copia de archivos al directorio de instalación
+
+```
+/opt/dragonfly_desktop/
+```
+
+El instalador crea este directorio si no existe y copia el contenido completo de la raíz del repositorio dentro de él mediante `cp -r`. Esto incluye `desktop.py`, `ducky_logic.py`, `gadget_handler.py`, la carpeta `payloads/`, `evil_portals/` y cualquier otro recurso presente en el proyecto.
+
+La ruta de instalación `/opt/` es la ubicación estándar de FHS (Filesystem Hierarchy Standard) para aplicaciones de terceros que no son gestionadas por el gestor de paquetes del sistema, garantizando coexistencia sin interferir con el árbol de directorios del SO.
+
+---
+
+#### Fase 3 — Entorno Virtual Python (venv) y dependencias de Python
+
+Dentro de `/opt/dragonfly_desktop/`, el instalador crea un entorno virtual Python aislado:
+
+```bash
+cd /opt/dragonfly_desktop
+python3 -m venv venv
+source venv/bin/activate
+pip install --upgrade pip
+pip install customtkinter
+```
+
+El uso de un `venv` dedicado ofrece tres ventajas críticas en el contexto de un escritorio de auditoría:
+
+1. **Aislamiento total:** `customtkinter` y sus dependencias no contaminan el Python del sistema ni entran en conflicto con versiones instaladas vía APT/pacman.
+2. **Portabilidad:** la instalación en `/opt/dragonfly_desktop/venv` es autocontenida. Si el operador actualiza el Python del sistema, la suite sigue funcionando desde su propio intérprete.
+3. **Desinstalación limpia:** eliminar `/opt/dragonfly_desktop` borra también el venv completo sin dejar residuos en el sistema.
+
+---
+
+#### Fase 4 — Creación del ejecutable global `dragonfly-gui`
+
+El instalador genera el script `/usr/local/bin/dragonfly-gui` y le otorga permisos de ejecución. Este script actúa como **wrapper de lanzamiento** y resuelve dos problemas habituales al ejecutar aplicaciones gráficas como root en sistemas modernos:
+
+**Problema 1 — Display Wayland/X11 como root:**
+En distribuciones modernas con Wayland o X11 con restricciones de Xauth, el usuario root no tiene permiso por defecto para abrir ventanas en el display del usuario que inició sesión. El wrapper resuelve esto con:
+
+```bash
+xhost +SI:localuser:root > /dev/null 2>&1
+export DISPLAY=${DISPLAY:-:0}
+```
+
+`xhost +SI:localuser:root` añade a root a la lista de control de acceso del servidor X del display activo, sin abrir el acceso a todos los usuarios del sistema (que sería el caso de `xhost +`). La variable `${DISPLAY:-:0}` garantiza que, si `$DISPLAY` no está definida en el entorno de root (común al usar `sudo` sin `-E`), se use `:0` como fallback.
+
+**Problema 2 — Activación del venv:**
+El wrapper activa el entorno virtual antes de lanzar Python:
+
+```bash
+cd /opt/dragonfly_desktop
+source venv/bin/activate
+python3 desktop.py
+```
+
+**Limpieza post-cierre:**
+Al terminar `desktop.py`, el wrapper revoca inmediatamente el permiso que había concedido a root:
+
+```bash
+xhost -SI:localuser:root > /dev/null 2>&1
+```
+
+Esto garantiza que la política de acceso al display queda exactamente como estaba antes de lanzar la herramienta, sin dejar permisos residuales.
+
+**Uso tras la instalación:**
+
+```bash
+sudo dragonfly-gui
+```
+
+El binario está disponible en `$PATH` de forma global. No es necesario navegar al directorio del proyecto ni activar manualmente el venv.
+
+---
+
+#### Desinstalación (Opción 2)
+
+```bash
+sudo ./installers/install_desktop.sh
+# → Seleccionar opción 2
+```
+
+El proceso elimina:
+
+| Componente | Ruta |
+|---|---|
+| Directorio de instalación completo (incluyendo venv) | `/opt/dragonfly_desktop/` |
+| Ejecutable global | `/usr/local/bin/dragonfly-gui` |
+| Paquetes APT/pacman/dnf | **No eliminados** (por diseño) |
+
+---
+
+### Comparativa de arquitecturas de instalación
+
+| Característica | `install_raspi.sh` | `install_desktop.sh` |
+|---|---|---|
+| Sistema operativo objetivo | Raspberry Pi OS Lite 32-bits (sin GUI) | Kali, Parrot, Debian, Ubuntu, Arch, Fedora |
+| Motor gráfico | X11 + Openbox (construido por el instalador) | Entorno de escritorio existente del sistema |
+| Arranque automático | Sí (autologin consola → startx → kiosco) | No (lanzamiento manual con `dragonfly-gui`) |
+| Directorio de instalación | Ruta del repositorio (in-place) | `/opt/dragonfly_desktop/` (sistema) |
+| Ejecutable global | No (lanzado por `.xinitrc`) | Sí (`/usr/local/bin/dragonfly-gui`) |
+| Entorno Python | Python de sistema (APT) | venv aislado en `/opt/dragonfly_desktop/venv/` |
+| Dependencias Python extra | `python3-netifaces`, `python3-aioquic` (APT) | `customtkinter` (pip, dentro del venv) |
+| Responder | Instalado en `/opt/Responder/` | No incluido |
+| USB Gadget HID | Configurado en `/usr/local/bin/usb_gadget.sh` | No aplicable |
+| Desinstalación | Módular (por componentes individuales) | Completa (directorio + binario) |
+
+---
+
+
+
 <div align="center">
+
 
 
 ## Gadgets de Hardware — Firmware
@@ -488,21 +839,44 @@ El módulo `gadget_handler.py` gestiona la conexión serie con reconexión autom
 
 </div>
 
-```
+```text
 DragonFly/
+├── LICENSE
+├── README.md
+├── desktop.py              # Interfaz desktop multiplataforma
 ├── raspi.py                # Interfaz táctil para Raspberry Pi
-├── desktop.py              # Interfaz desktop para Kali Linux
-├── ducky_logic.py          # Motor de inyección HID Rubber Ducky
-├── gadget_handler.py       # Gestor de comunicación serie con ESP32
-├── install.sh              # Instalador automatizado
-├── payloads/               # Scripts Rubber Ducky (.txt)
 ├── evil_portals/           # Portales cautivos HTML
 │   ├── portal_01/
 │   │   └── index.html
 │   └── portal_02/
 │       └── index.html
-└── gadgets/
-    └── BlueFly_Firmware.ino
+├── gadgets/                # Firmware para hardware externo
+│   └── BlueFly_Firmware.ino
+├── icons/                  # Iconos para la interfaz gráfica
+│   ├── destroy.png
+│   ├── ducky.png
+│   ├── jammer.png
+│   ├── mac.png
+│   ├── poison.png
+│   ├── recon.png
+│   ├── utils.png
+│   └── wifi.png
+├── installers/             # Instaladores automatizados
+│   ├── install_desktop.sh
+│   └── install_raspi.sh
+├── modules/                # Lógica central e integraciones backend
+│   ├── __init__.py
+│   ├── ducky_logic.py      # Motor de inyección HID Rubber Ducky
+│   ├── gadget_handler.py   # Gestor de comunicación serie con ESP32
+│   └── poison_logic.py     # Lógica de intercepción de red
+└── payloads/               # Scripts Rubber Ducky (.txt)
+    ├── auditoria.txt
+    ├── cmatrix_flood.txt
+    ├── prueba_teclas.txt
+    ├── rickroll.txt
+    ├── windows_fake_update.txt
+    ├── windows_rickroll.txt
+    └── windows_tts.txt
 ```
 
 ---
