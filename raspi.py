@@ -552,13 +552,13 @@ class RedTeamApp(tk.Tk):
 
         # 1. Contenedor del borde rojo con un padx/pady externo (separa el borde de la pantalla)
         self.border_frame = tk.Frame(self, bg=COLOR_BOTON_ROJO)
-        self.border_frame.pack(fill='both', expand=True, padx=8, pady=8) # <-- Espacio exterior
+        self.border_frame.pack(fill='both', expand=True, padx=6, pady=6) # <-- Espacio exterior
 
         # 2. Main frame insertado DENTRO del border_frame
         self.main_frame = ttk.Frame(self.border_frame, style='Dark.TFrame')
         
         # 3. El padx/pady interno aquí define puramente el grosor de la línea roja
-        self.main_frame.pack(fill='both', expand=True, padx=3, pady=3) # <-- Grosor de la línea
+        self.main_frame.pack(fill='both', expand=True, padx=2, pady=2) # <-- Grosor de la línea
 
         self.back_btn = None
         self.mostrar_splash_screen()
