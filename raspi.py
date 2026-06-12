@@ -547,12 +547,21 @@ class RedTeamApp(tk.Tk):
         for d in [BASE_DIR_NMAP, BASE_DIR_WIFI, BASE_DIR_EVIL, BASE_DIR_BLE, BASE_DIR_POISON]:
             os.makedirs(d, exist_ok=True)
 
-        self.main_frame = ttk.Frame(self, style='Dark.TFrame')
-        self.main_frame.pack(fill='both', expand=True)
+        # Configura el fondo de la ventana raíz en oscuro para el margen exterior
+        self.configure(bg=COLOR_FONDO_PRINCIPAL)
+
+        # 1. Contenedor del borde rojo con un padx/pady externo (separa el borde de la pantalla)
+        self.border_frame = tk.Frame(self, bg=COLOR_BOTON_ROJO)
+        self.border_frame.pack(fill='both', expand=True, padx=8, pady=8) # <-- Espacio exterior
+
+        # 2. Main frame insertado DENTRO del border_frame
+        self.main_frame = ttk.Frame(self.border_frame, style='Dark.TFrame')
+        
+        # 3. El padx/pady interno aquí define puramente el grosor de la línea roja
+        self.main_frame.pack(fill='both', expand=True, padx=3, pady=3) # <-- Grosor de la línea
 
         self.back_btn = None
         self.mostrar_splash_screen()
-
     # ---------------- helpers de navegación ----------------
     def limpiar_main_frame(self):
         if self._console_after_id is not None:
