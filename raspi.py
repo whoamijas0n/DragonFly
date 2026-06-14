@@ -120,6 +120,7 @@ BASE_DIR_WIFI = "Resultados_Handshake"
 BASE_DIR_EVIL = "Resultados_EvilTwin"
 BASE_DIR_BLE = "Resultados_BLE"
 BASE_DIR_POISON = "Resultados_Poison" 
+BASE_DIR_CLIENTS = "Resultados_Clientes" 
 
 # ==========================================
 # CLASE SCROLLABLE FRAME (Táctil optimizado)
@@ -731,7 +732,7 @@ class RedTeamApp(tk.Tk):
         self.gadget_available = False
         self._gadget_initialized = False
 
-        for d in [BASE_DIR_NMAP, BASE_DIR_WIFI, BASE_DIR_EVIL, BASE_DIR_BLE, BASE_DIR_POISON]:
+        for d in [BASE_DIR_NMAP, BASE_DIR_WIFI, BASE_DIR_EVIL, BASE_DIR_BLE, BASE_DIR_POISON, BASE_DIR_CLIENTS]:
             os.makedirs(d, exist_ok=True)
 
         # Configura el fondo de la ventana raíz en oscuro para el margen exterior
@@ -1270,12 +1271,14 @@ class RedTeamApp(tk.Tk):
         
         opciones = [
             ("Activar Monitor", self._wifi_modo_monitor),
+            ("Clientes Conectados", self._wifi_client_list), 
             ("Captura Handshake", self._wifi_captura_handshake),
             ("Ataque Evil Twin", self._wifi_evil_twin),
             ("Desautenticación", self._wifi_deauth),
-            ("Deauth Múltiple (Dual‑Band)", self._wifi_deauth_multi),   # <-- NUEVO
+            ("Deauth Múltiple (Dual‑Band)", self._wifi_deauth_multi),
             ("Explorar Handshakes", self._wifi_explorar_handshakes),
             ("Explorar Evil Twin", self._wifi_explorar_evil),
+            ("Explorar Clientes", self._wifi_explorar_clientes), 
         ]
         for texto, cmd in opciones:
             scroll_wifi.add_button(text=texto, command=cmd, style='Red.TButton', width=28)
@@ -2447,12 +2450,304 @@ if __name__ == "__main__":
         self.escribir_consola("[*] Ataque dual detenido. Puede volver al menú.")
 
 
+    # ==========================================
+    # ENUMERACIÓN DE CLIENTES PASIVA
+    # ==========================================
+    def _wifi_client_list(self):
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(self.show_wifi_menu)
+        ttk.Label(self.main_frame, text="ENUMERAR CLIENTES", style='Title.TLabel').pack(pady=2)
+
+        interfaces = self.obtener_interfaces_wifi()
+        if not interfaces:
+            ttk.Label(self.main_frame, text="No hay interfaces WiFi.", style='Dark.TLabel').pack(pady=10)
+            self.mostrar_consola()
+            return
+
+        if len(interfaces) < 2:
+            self._wifi_client_single_select_iface()
+        else:
+            scroll = ScrollableFrame(self.main_frame, max_items=10)
+            scroll.pack(fill='both', expand=True, padx=2, pady=2)
+            ttk.Label(scroll.scrollable_frame, text="Seleccione modalidad:", style='Gray.TLabel').pack(pady=(0, 4))
+
+            scroll.add_button(text="Single-band (1 Interfaz)", command=self._wifi_client_single_select_iface, style='Red.TButton', width=28)
+            scroll.add_button(text="Dual-band (2 Interfaces)", command=self._wifi_client_dual_select_ifaces, style='Danger.TButton', width=28)
+
+            self.mostrar_consola(parent=scroll.scrollable_frame)
+
+    def _wifi_client_single_select_iface(self):
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(self._wifi_client_list)
+        ttk.Label(self.main_frame, text="SINGLE-BAND: IFACE", style='Title.TLabel').pack(pady=2)
+
+        scroll = ScrollableFrame(self.main_frame, max_items=10)
+        scroll.pack(fill='both', expand=True, padx=2, pady=2)
+
+        self.client_iface_btns = []
+        for iface in self.obtener_interfaces_wifi():
+            btn = scroll.add_button(
+                text=iface, 
+                command=lambda i=iface: self._wifi_client_scan(i, mode='single'), 
+                style='Red.TButton', width=28
+            )
+            if btn: self.client_iface_btns.append(btn)
+
+        self.mostrar_consola(parent=scroll.scrollable_frame)
+
+    def _wifi_client_dual_select_ifaces(self):
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(self._wifi_client_list)
+        ttk.Label(self.main_frame, text="DUAL-BAND: IFACES", style='Title.TLabel').pack(pady=2)
+
+        scroll = ScrollableFrame(self.main_frame, max_items=10)
+        scroll.pack(fill='both', expand=True, padx=2, pady=2)
+
+        ttk.Label(scroll.scrollable_frame, text="Seleccione 2 interfaces:", style='Gray.TLabel').pack(pady=(0, 4))
+
+        self.wifi_state.setdefault("dual_client", {})["selected"] = []
+        self.wifi_state["dual_client"]["btns"] = []
+
+        for iface in self.obtener_interfaces_wifi():
+            btn = scroll.add_button(
+                text=iface, 
+                command=lambda i=iface: self._wifi_client_dual_add(i), 
+                style='Red.TButton', width=28
+            )
+            if btn: self.wifi_state["dual_client"]["btns"].append(btn)
+
+        self.mostrar_consola(parent=scroll.scrollable_frame)
+
+    def _wifi_client_dual_add(self, iface):
+        state = self.wifi_state["dual_client"]
+        selected = state["selected"]
+        if iface in selected: return
+        selected.append(iface)
+
+        for btn in state["btns"]:
+            if btn.cget("text") == iface:
+                btn.config(style='Gray.TButton')
+                btn.state(['disabled'])
+                break
+
+        if len(selected) == 2:
+            self.escribir_consola(f"[*] Interfaces seleccionadas: {selected[0]}, {selected[1]}")
+            self._wifi_client_scan(selected[0], iface_5g=selected[1], mode='dual')
+
+    def _wifi_client_scan(self, iface, iface_5g=None, mode='single'):
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(self._wifi_client_list)
+        ttk.Label(self.main_frame, text="ESCANEANDO REDES...", style='Title.TLabel').pack(pady=2)
+        self.mostrar_consola()
+
+        self.wifi_state["client_scan_mode"] = mode
+        self.wifi_state["iface_2g"] = iface
+        self.wifi_state["iface_5g"] = iface_5g
+
+        scan_prefix_2g = self._generar_nombre_temporal("client_scan_2g")
+        scan_prefix_5g = self._generar_nombre_temporal("client_scan_5g") if mode == 'dual' else None
+
+        def escanear():
+            subprocess.run(["sudo", "airmon-ng", "check", "kill"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["sudo", "airmon-ng", "start", iface], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            mon_2g = f"{iface}mon" if os.path.exists(f"/sys/class/net/{iface}mon") else iface
+            self.wifi_state["mon_iface_2g"] = mon_2g
+
+            mon_5g = None
+            if mode == 'dual' and iface_5g:
+                subprocess.run(["sudo", "airmon-ng", "start", iface_5g], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                mon_5g = f"{iface_5g}mon" if os.path.exists(f"/sys/class/net/{iface_5g}mon") else iface_5g
+                self.wifi_state["mon_iface_5g"] = mon_5g
+
+            self.after(0, lambda: self.escribir_consola(f"[*] Escaneando espectro (20s)..."))
+
+            procs = []
+            cmd_2g = f"sudo timeout -k 5 20s airodump-ng {mon_2g} -w {scan_prefix_2g} --output-format csv"
+            procs.append(subprocess.Popen(cmd_2g, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+
+            if mode == 'dual' and mon_5g:
+                cmd_5g = f"sudo timeout -k 5 20s airodump-ng {mon_5g} -w {scan_prefix_5g} --output-format csv"
+                procs.append(subprocess.Popen(cmd_5g, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+
+            for p in procs: p.wait()
+
+            redes = []
+            iface_map = {}
+
+            def parsear_csv(prefix, mon_iface):
+                try:
+                    with open(f"{prefix}-01.csv", "r", errors="ignore") as f:
+                        partes = f.read().split("Station MAC,")
+                        for linea in partes[0].split("\n")[2:]:
+                            r = linea.split(",")
+                            if len(r) >= 14 and ":" in r[0]:
+                                ch = r[3].strip()
+                                bssid = r[0].strip()
+                                essid = r[13].strip() or "<Oculta>"
+                                banda = '2.4GHz' if int(ch) <= 14 else '5GHz'
+                                redes.append({"bssid": bssid, "ch": ch, "essid": essid, "banda": banda})
+                                iface_map[bssid] = mon_iface
+                except Exception: pass
+                finally:
+                    for ext in ['-01.csv', '-01.cap', '-01.kismet.csv', '-01.kismet.netxml']:
+                        try: os.remove(f"{prefix}{ext}")
+                        except: pass
+
+            parsear_csv(scan_prefix_2g, mon_2g)
+            if mode == 'dual' and scan_prefix_5g: parsear_csv(scan_prefix_5g, mon_5g)
+
+            # Remover BSSIDs duplicados y ordenar por banda
+            redes_unicas = list({v['bssid']:v for v in redes}.values())
+            self.after(0, lambda: self._wifi_client_show_networks(redes_unicas, iface_map))
+
+        threading.Thread(target=escanear, daemon=True).start()
+
+    def _wifi_client_show_networks(self, redes, iface_map):
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(self._wifi_client_list)
+        ttk.Label(self.main_frame, text="RED OBJETIVO", style='Title.TLabel').pack(pady=2)
+
+        if not redes:
+            ttk.Label(self.main_frame, text="No hay redes detectadas.", style='Dark.TLabel').pack(pady=10)
+            return
+
+        scroll = ScrollableFrame(self.main_frame, max_items=80)
+        scroll.pack(fill='both', expand=True, padx=5, pady=2)
+
+        # Agrupar visualmente por banda
+        for red in sorted(redes, key=lambda x: (x['banda'], x['essid'])):
+            texto = f"{red['essid']} (Ch:{red['ch']}, {red['banda']})"
+            mon_asociada = iface_map.get(red['bssid'])
+            scroll.add_button(
+                text=texto, 
+                command=lambda r=red, m=mon_asociada: self._wifi_client_select_target(r, m), 
+                style='Gray.TButton', width=28
+            )
+
+        self.mostrar_consola(parent=scroll.scrollable_frame)
+        gc.collect()
+
+    def _wifi_client_select_target(self, red, iface_mon):
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(self._wifi_client_list)
+        ttk.Label(self.main_frame, text="CONFIRMAR ENUMERACIÓN", style='Title.TLabel').pack(pady=2)
+
+        scroll = ScrollableFrame(self.main_frame, max_items=10)
+        scroll.pack(fill='both', expand=True, padx=2, pady=2)
+
+        info = f"ESSID: {red['essid']}\nBSSID: {red['bssid']}\nCanal: {red['ch']} ({red['banda']})"
+        ttk.Label(scroll.scrollable_frame, text=info, style='Mono.TLabel', justify='center').pack(pady=10)
+
+        self.client_scan_btns = []
+        btn_iniciar = scroll.add_button(text="Iniciar Enumeración (30s)", command=lambda: self._wifi_client_enumerate(red, iface_mon), style='Red.TButton', width=28)
+        self.client_scan_btns.append(btn_iniciar)
+
+        self.btn_detener_client_enum = ttk.Button(scroll.scrollable_frame, text="Detener Enumeración", style='Gray.TButton', command=self._wifi_client_detener)
+        self.btn_detener_client_enum.pack(pady=(15, 3), fill='x', padx=20)
+        self.btn_detener_client_enum.state(['disabled'])
+
+        self.mostrar_consola(parent=scroll.scrollable_frame)
+
+    def _wifi_client_enumerate(self, red, iface_mon):
+        for btn in getattr(self, 'client_scan_btns', []):
+            if btn.winfo_exists():
+                btn.config(style='Gray.TButton')
+                btn.state(['disabled'])
+
+        if hasattr(self, 'btn_detener_client_enum') and self.btn_detener_client_enum.winfo_exists():
+            self.btn_detener_client_enum.config(style='Danger.TButton')
+            self.btn_detener_client_enum.state(['!disabled'])
+
+        self.escribir_consola(f"[*] Recopilando MACs pasivamente (30s)...")
+
+        scan_prefix = self._generar_nombre_temporal("client_enum")
+
+        def enum_thread():
+            subprocess.run(["sudo", "iw", "dev", iface_mon, "set", "channel", str(red['ch'])], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.enum_proc = subprocess.Popen(f"sudo timeout -k 5 30s airodump-ng --bssid {red['bssid']} -c {red['ch']} {iface_mon} -w {scan_prefix} --output-format csv", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.enum_proc.wait()
+
+            clientes = []
+            try:
+                with open(f"{scan_prefix}-01.csv", "r", errors="ignore") as f:
+                    partes = f.read().split("Station MAC,")
+                    if len(partes) > 1:
+                        for linea in partes[1].split("\n")[1:]:
+                            c = linea.split(",")
+                            if len(c) >= 6 and ":" in c[0]:
+                                clientes.append(c[0].strip())
+            except Exception: pass
+            finally:
+                for ext in ['-01.csv', '-01.cap', '-01.kismet.csv', '-01.kismet.netxml']:
+                    try: os.remove(f"{scan_prefix}{ext}")
+                    except: pass
+
+            timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+            res_dir = os.path.join(BASE_DIR_CLIENTS, f"Clientes-{timestamp}")
+            os.makedirs(res_dir, exist_ok=True)
+            with open(os.path.join(res_dir, "clientes.txt"), "w") as f:
+                f.write(f"ESSID: {red['essid']}\nBSSID: {red['bssid']}\n\nCLIENTES CONECTADOS:\n")
+                f.write("\n".join(clientes) if clientes else "No se detectaron clientes activos.")
+
+            self.enum_proc = None
+            self.after(0, lambda: self._wifi_client_show_results(clientes, red))
+
+        threading.Thread(target=enum_thread, daemon=True).start()
+
+    def _wifi_client_detener(self):
+        self.escribir_consola("\n[!] Abortando enumeración de clientes...")
+        if hasattr(self, 'btn_detener_client_enum') and self.btn_detener_client_enum.winfo_exists():
+            self.btn_detener_client_enum.config(style='Gray.TButton')
+            self.btn_detener_client_enum.state(['disabled'])
+
+        if hasattr(self, 'enum_proc') and self.enum_proc:
+            try:
+                self.enum_proc.terminate()
+            except:
+                self.enum_proc.kill()
+        subprocess.run(["sudo", "pkill", "-f", "airodump-ng"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def _wifi_client_show_results(self, clientes, red):
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(self._wifi_client_restore)
+        ttk.Label(self.main_frame, text="CLIENTES ENCONTRADOS", style='Title.TLabel').pack(pady=2)
+
+        scroll = ScrollableFrame(self.main_frame, max_items=50)
+        scroll.pack(fill='both', expand=True, padx=5, pady=2)
+
+        if not clientes:
+            ttk.Label(scroll.scrollable_frame, text="0 clientes detectados.", style='Dark.TLabel').pack(pady=10)
+        else:
+            for mac in clientes:
+                scroll.add_button(text=f"{mac} (Desconocido)", command=lambda: None, style='Gray.TButton', width=28)
+
+        scroll.add_button(text="Guardar y volver", command=self._wifi_client_restore, style='Red.TButton', width=28)
+        self.mostrar_consola(parent=scroll.scrollable_frame)
+        self.escribir_consola(f"[+] Total clientes: {len(clientes)}. Resultados guardados en {BASE_DIR_CLIENTS}/")
+        gc.collect()
+
+    def _wifi_client_restore(self):
+        self.escribir_consola("[*] Deteniendo monitor y restaurando red...")
+        def restore():
+            subprocess.run(["sudo", "pkill", "-f", "airodump-ng"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            for key in ["mon_iface_2g", "mon_iface_5g"]:
+                mon = self.wifi_state.get(key)
+                if mon: subprocess.run(["sudo", "airmon-ng", "stop", mon], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["sudo", "systemctl", "restart", "NetworkManager"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.after(0, self.show_wifi_menu)
+            
+        threading.Thread(target=restore, daemon=True).start()
+
+
 
     def _wifi_explorar_handshakes(self):
         self._mostrar_explorador_generico(BASE_DIR_WIFI, "CAPTURAS", self.show_wifi_menu)
 
     def _wifi_explorar_evil(self):
         self._mostrar_explorador_generico(BASE_DIR_EVIL, "EVIL TWIN RES", self.show_wifi_menu)
+
+    def _wifi_explorar_clientes(self):
+        self._mostrar_explorador_generico(BASE_DIR_CLIENTS, "CLIENTES RES", self.show_wifi_menu)
 
     def _mostrar_explorador_generico(self, base_dir, titulo, callback_volver):
         self.limpiar_main_frame()
