@@ -83,36 +83,25 @@ ARTE_DRAGON = """
 
 
 # ──────────────────────────────────────────────────────────────
-# PALETA DE COLORES — CYBERDECK FLAT DESIGN v2
+# PALETA DE COLORES — TUI MONOCROMÁTICA RETRO
 # ──────────────────────────────────────────────────────────────
-COLOR_FONDO_BASE          = "#0c0c0c"
 COLOR_FONDO_PRINCIPAL     = "#000000"
+COLOR_FONDO_BASE          = "#000000"
 COLOR_FONDO_CARD          = "#000000"
-COLOR_FONDO_ELEVADO       = "#272727"
-COLOR_BOTON_ROJO          = "#cc0a0a"
-COLOR_BOTON_HOVER         = "#900008"
-COLOR_ROJO_BRIGHT         = "#ff2222"
-COLOR_BOTON_PELIGRO       = "#d97700"
-COLOR_BOTON_PELIGRO_HOVER = "#b36200"
-COLOR_BOTON_GRIS          = "#2c2c2c"
-COLOR_BOTON_GRIS_HOVER    = "#1c1c1c"
-COLOR_TEXTO_PRIMARIO      = "#e2e2e2"
-COLOR_TEXTO_SECUNDARIO    = "#787878"
-COLOR_TEXTO_TERMINAL      = "#ff3333"
-COLOR_TEXTO_EXITO         = "#33cc66"
-COLOR_TEXTO_ADVERTENCIA   = "#ffaa00"
-COLOR_BORDE_SUTIL         = "#282828"
-COLOR_BORDE_ACTIVO        = "#cc0a0a"
-COLOR_FONDO_SIDEBAR       = "#0c0c0c"
+COLOR_BLANCO              = "#FFFFFF"
+COLOR_TEXTO_PRIMARIO      = "#FFFFFF"
+COLOR_TEXTO_SECUNDARIO    = "#E0E0E0"
+COLOR_TEXTO_TERMINAL      = "#FFFFFF"
+COLOR_BORDE               = "#FFFFFF"
 
 # ──────────────────────────────────────────────────────────────
-# JERARQUÍA TIPOGRÁFICA
+# JERARQUÍA TIPOGRÁFICA (Solo Monoespaciadas)
 # ──────────────────────────────────────────────────────────────
-FONT_TITLE  = ('Courier', 11, 'bold')
-FONT_BODY   = ('Courier',  9        )
-FONT_BODY_B = ('Courier',  9, 'bold')
-FONT_SMALL  = ('Courier',  8        )
-FONT_MICRO  = ('Courier',  7        )
+FONT_TITLE  = ('Courier', 12, 'bold')
+FONT_BODY   = ('Courier', 10)
+FONT_BODY_B = ('Courier', 10, 'bold')
+FONT_SMALL  = ('Courier', 9)
+FONT_MICRO  = ('Courier', 8)
 
 # Directorios base para resultados
 BASE_DIR_NMAP = "Resultados_Nmap"
@@ -130,8 +119,7 @@ class ScrollableFrame(tk.Frame):
         super().__init__(parent, *args, **kwargs)
         self.bg_color = COLOR_FONDO_PRINCIPAL
         self.max_items = max_items
-        self.configure(bg=self.bg_color, highlightthickness=0, borderwidth=0)
-
+        self.configure(bg=self.bg_color, highlightbackground=COLOR_BLANCO, highlightcolor=COLOR_BLANCO, highlightthickness=1, borderwidth=0)
         # Canvas con scrollbar
         self.canvas = tk.Canvas(self, bg=self.bg_color, highlightthickness=0, borderwidth=0)
         self.scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview,
@@ -198,25 +186,28 @@ class ScrollableFrame(tk.Frame):
         self.canvas.configure(scrollregion=(0, 0, 0, 0))
         gc.collect()
 
-    def add_button(self, text, command, style='Menu.TButton', width=None):
+    def add_button(self, text, command, style='TUI.TButton', width=None):
         current_children = len(self.scrollable_frame.winfo_children())
         if current_children >= self.max_items:
             warning_label = tk.Label(self.scrollable_frame,
-                                     text="[!] Demasiados resultados. Revisa desde consola.",
+                                     text="[!] OVERFLOW: VER CONSOLA",
                                      bg=self.bg_color, fg=COLOR_TEXTO_TERMINAL,
-                                     font=('Helvetica', 9))
+                                     font=FONT_BODY_B)
             warning_label.pack(fill='x', padx=10, pady=4)
             return None
 
         if width is None:
             width = 28
 
-        btn = ttk.Button(self.scrollable_frame, text=text, style=style, width=width)
+        # Inyección dinámica de estilo TUI
+        tui_text = f"[ {text.upper()} ]"
+
+        btn = ttk.Button(self.scrollable_frame, text=tui_text, style=style, width=width)
         btn.configure(command=command)
         
-        # Aplicación de padding externo para Flat Design (padx=10, pady=4)
-        btn.pack(fill='x', padx=10, pady=4)
+        btn.pack(fill='x', padx=5, pady=2)
         return btn
+
 
     def add_widget(self, widget, **pack_options):
         current_children = len(self.scrollable_frame.winfo_children())
@@ -482,130 +473,51 @@ class RedTeamApp(tk.Tk):
         style = ttk.Style()
         style.theme_use('clam')
 
-        # ── FRAMES ──────────────────────────────────────────────────────
-        style.configure('TFrame',
-            background=COLOR_FONDO_PRINCIPAL, borderwidth=0)
-        style.configure('Dark.TFrame',
-            background=COLOR_FONDO_PRINCIPAL, borderwidth=0)
-        style.configure('Card.TFrame',
-            background=COLOR_FONDO_CARD, borderwidth=0)
+        # ── FRAMES & LABELS ─────────────────────────────────────────────
+        style.configure('TFrame', background=COLOR_FONDO_PRINCIPAL, borderwidth=0)
+        style.configure('Dark.TFrame', background=COLOR_FONDO_PRINCIPAL, borderwidth=0)
+        style.configure('Card.TFrame', background=COLOR_FONDO_PRINCIPAL, borderwidth=0)
 
-        # ── LABELS ──────────────────────────────────────────────────────
-        style.configure('TLabel',
-            background=COLOR_FONDO_PRINCIPAL, foreground=COLOR_TEXTO_PRIMARIO,
-            font=FONT_BODY, borderwidth=0)
-        style.configure('Dark.TLabel',
-            background=COLOR_FONDO_PRINCIPAL, foreground=COLOR_TEXTO_PRIMARIO,
-            font=FONT_BODY, borderwidth=0)
-        style.configure('Title.TLabel',
-            background=COLOR_FONDO_PRINCIPAL, foreground=COLOR_ROJO_BRIGHT,
-            font=FONT_TITLE, borderwidth=0)
-        style.configure('Gray.TLabel',
-            background=COLOR_FONDO_PRINCIPAL, foreground=COLOR_TEXTO_SECUNDARIO,
-            font=FONT_SMALL, borderwidth=0)
-        style.configure('Mono.TLabel',
-            background=COLOR_FONDO_PRINCIPAL, foreground=COLOR_TEXTO_TERMINAL,
-            font=FONT_BODY_B, borderwidth=0)
-        style.configure('Card.TLabel',
-            background=COLOR_FONDO_CARD, foreground=COLOR_TEXTO_PRIMARIO,
-            font=FONT_BODY, borderwidth=0)
+        style.configure('TLabel', background=COLOR_FONDO_PRINCIPAL, foreground=COLOR_TEXTO_PRIMARIO, font=FONT_BODY, borderwidth=0)
+        style.configure('Dark.TLabel', background=COLOR_FONDO_PRINCIPAL, foreground=COLOR_TEXTO_PRIMARIO, font=FONT_BODY, borderwidth=0)
+        style.configure('Title.TLabel', background=COLOR_FONDO_PRINCIPAL, foreground=COLOR_TEXTO_PRIMARIO, font=FONT_TITLE, borderwidth=0)
+        style.configure('Gray.TLabel', background=COLOR_FONDO_PRINCIPAL, foreground=COLOR_TEXTO_SECUNDARIO, font=FONT_SMALL, borderwidth=0)
+        style.configure('Mono.TLabel', background=COLOR_FONDO_PRINCIPAL, foreground=COLOR_TEXTO_PRIMARIO, font=FONT_BODY_B, borderwidth=0)
 
-        # ── BOTÓN BASE ───────────────────────────────────────────────────
-        style.configure('TButton', borderwidth=0, relief='flat', padding=(8, 6))
-        style.map('TButton',
-            background=[('active', COLOR_BOTON_HOVER)],
-            bordercolor=[('focus', COLOR_BORDE_ACTIVO)],
-            focuscolor=[('focus', COLOR_BORDE_ACTIVO)])
+        # ── TUI BUTTON ENGINE (Invierte colores al tocar) ───────────────
+        tui_btn_config = {
+            'background': COLOR_FONDO_PRINCIPAL, 'foreground': COLOR_TEXTO_PRIMARIO,
+            'relief': 'flat', 'font': FONT_BODY_B, 'borderwidth': 1,
+            'bordercolor': COLOR_FONDO_PRINCIPAL, 'padding': (4, 4)
+        }
+        tui_btn_map = {
+            'background': [('active', COLOR_BLANCO), ('pressed', COLOR_BLANCO), ('disabled', COLOR_FONDO_PRINCIPAL)],
+            'foreground': [('active', COLOR_FONDO_PRINCIPAL), ('pressed', COLOR_FONDO_PRINCIPAL), ('disabled', '#555555')],
+            'bordercolor': [('focus', COLOR_BLANCO)]
+        }
 
-        # ── RED BUTTON ───────────────────────────────────────────────────
-        style.configure('Red.TButton',
-            background=COLOR_BOTON_ROJO, foreground='white',
-            relief='flat', font=FONT_BODY_B,
-            bordercolor=COLOR_BOTON_ROJO, focuscolor=COLOR_BORDE_ACTIVO,
-            borderwidth=1, focusthickness=2, padding=(8, 9))
-        style.map('Red.TButton',
-            background=[('pressed', '#660005'), ('active', COLOR_BOTON_HOVER)],
-            foreground=[('pressed', '#cccccc'), ('active', 'white')],
-            bordercolor=[('focus', COLOR_ROJO_BRIGHT), ('active', COLOR_BOTON_HOVER)],
-            relief=[('pressed', 'flat')])
+        # Mapeamos todos los estilos heredados al motor TUI para evitar refactorización profunda
+        for btn_s in ['TButton', 'Red.TButton', 'Gray.TButton', 'Danger.TButton', 'Menu.TButton', 'AppIcon.TButton', 'TUI.TButton']:
+            style.configure(btn_s, **tui_btn_config)
+            style.map(btn_s, **tui_btn_map)
 
-        # ── GRAY BUTTON ──────────────────────────────────────────────────
-        style.configure('Gray.TButton',
-            background=COLOR_BOTON_GRIS, foreground=COLOR_TEXTO_PRIMARIO,
-            relief='flat', font=FONT_BODY,
-            bordercolor=COLOR_BOTON_GRIS, focuscolor='#555555',
-            borderwidth=1, focusthickness=1, padding=(8, 9))
-        style.map('Gray.TButton',
-            background=[('pressed', '#0f0f0f'), ('active', COLOR_BOTON_GRIS_HOVER)],
-            foreground=[('pressed', '#888888'), ('active', COLOR_TEXTO_PRIMARIO)],
-            bordercolor=[('focus', '#555555')])
-
-        # ── DANGER BUTTON ────────────────────────────────────────────────
-        style.configure('Danger.TButton',
-            background=COLOR_BOTON_PELIGRO, foreground='#0c0c0c',
-            relief='flat', font=FONT_BODY_B,
-            bordercolor=COLOR_BOTON_PELIGRO, focuscolor=COLOR_BOTON_PELIGRO,
-            borderwidth=1, focusthickness=1, padding=(8, 9))
-        style.map('Danger.TButton',
-            background=[('pressed', '#8a4a00'), ('active', COLOR_BOTON_PELIGRO_HOVER)],
-            foreground=[('pressed', '#cccccc')])
-
-        # ── MENU BUTTON ──────────────────────────────────────────────────
-        style.configure('Menu.TButton',
-            background=COLOR_FONDO_CARD, foreground=COLOR_TEXTO_PRIMARIO,
-            relief='flat', font=FONT_BODY,
-            bordercolor=COLOR_BORDE_SUTIL, focuscolor=COLOR_BORDE_ACTIVO,
-            borderwidth=1, focusthickness=1, padding=(10, 9), anchor='w')
-        style.map('Menu.TButton',
-            background=[('pressed', COLOR_BOTON_ROJO), ('active', '#282828')],
-            foreground=[('pressed', 'white'), ('active', COLOR_TEXTO_PRIMARIO)],
-            bordercolor=[('focus', COLOR_BORDE_ACTIVO), ('active', '#3a3a3a')])
-
-        # ── APP ICON BUTTON ───────────────────────────────────────────────
-        style.configure('AppIcon.TButton',
-            background=COLOR_FONDO_CARD, foreground=COLOR_TEXTO_PRIMARIO,
-            relief='flat', font=('Courier', 8, 'bold'),
-            borderwidth=0, padding=(4, 6))
-        style.map('AppIcon.TButton',
-            background=[('pressed', COLOR_BOTON_ROJO), ('active', '#282828')],
-            foreground=[('pressed', 'white'), ('active', COLOR_TEXTO_PRIMARIO)])
-
-        # ── SCROLLBAR ────────────────────────────────────────────────────
+        # ── COMPONENTES SECUNDARIOS ─────────────────────────────────────
         style.configure('Dark.Vertical.TScrollbar',
-            background='#2a2a2a', troughcolor=COLOR_FONDO_PRINCIPAL,
-            bordercolor=COLOR_FONDO_PRINCIPAL, arrowcolor='#555555',
-            arrowsize=18, relief='flat')
+            background=COLOR_FONDO_PRINCIPAL, troughcolor=COLOR_FONDO_PRINCIPAL,
+            bordercolor=COLOR_BLANCO, arrowcolor=COLOR_BLANCO, arrowsize=14, relief='flat')
         style.map('Dark.Vertical.TScrollbar',
-            background=[('active', COLOR_BOTON_ROJO), ('pressed', COLOR_BOTON_HOVER)],
-            arrowcolor=[('active', 'white')])
+            background=[('active', COLOR_BLANCO), ('pressed', COLOR_BLANCO)],
+            arrowcolor=[('active', COLOR_FONDO_PRINCIPAL)])
 
-        # ── CHECKBUTTON ──────────────────────────────────────────────────
-        style.configure('Dark.TCheckbutton',
-            background=COLOR_FONDO_PRINCIPAL, foreground=COLOR_TEXTO_PRIMARIO,
-            indicatorcolor='#2c2c2c', focuscolor='none',
-            font=FONT_BODY, borderwidth=0)
-        style.map('Dark.TCheckbutton',
-            indicatorcolor=[('selected', COLOR_BOTON_ROJO), ('active', COLOR_BOTON_HOVER)],
-            foreground=[('active', 'white')])
+        style.configure('Dark.TEntry', fieldbackground=COLOR_FONDO_PRINCIPAL, foreground=COLOR_TEXTO_PRIMARIO, insertcolor=COLOR_BLANCO, bordercolor=COLOR_BLANCO, focuscolor=COLOR_BLANCO, padding=2, borderwidth=1, relief='flat', font=FONT_BODY)
+        style.configure('Dark.TCheckbutton', background=COLOR_FONDO_PRINCIPAL, foreground=COLOR_TEXTO_PRIMARIO, font=FONT_BODY)
+        style.map('Dark.TCheckbutton', foreground=[('active', COLOR_BLANCO)])
+        
+        style.configure('Dark.TMenubutton', background=COLOR_FONDO_PRINCIPAL, foreground=COLOR_TEXTO_PRIMARIO, borderwidth=1, bordercolor=COLOR_BLANCO, relief='flat', arrowcolor=COLOR_BLANCO, font=FONT_BODY)
+        style.map('Dark.TMenubutton', background=[('active', COLOR_BLANCO)], foreground=[('active', COLOR_FONDO_PRINCIPAL)], arrowcolor=[('active', COLOR_FONDO_PRINCIPAL)])
 
-        # ── ENTRY ────────────────────────────────────────────────────────
-        style.configure('Dark.TEntry',
-            fieldbackground='#1a1a1a', foreground=COLOR_TEXTO_PRIMARIO,
-            insertcolor=COLOR_ROJO_BRIGHT, bordercolor=COLOR_BORDE_SUTIL,
-            focuscolor=COLOR_BORDE_ACTIVO, padding=5,
-            borderwidth=1, relief='flat', font=FONT_BODY)
-        style.map('Dark.TEntry',
-            bordercolor=[('focus', COLOR_BORDE_ACTIVO), ('hover', '#3a3a3a')],
-            fieldbackground=[('focus', '#1e1e1e')])
-
-        # ── MENUBUTTON ───────────────────────────────────────────────────
-        style.configure('Dark.TMenubutton',
-            background=COLOR_BOTON_ROJO, foreground='white',
-            bordercolor=COLOR_BORDE_ACTIVO, relief='flat',
-            arrowcolor='white', font=FONT_BODY, padding=(8, 6))
-        style.map('Dark.TMenubutton',
-            background=[('active', COLOR_BOTON_HOVER)],
-            arrowcolor=[('active', 'white')])
+        style.configure('TUI.TLabelframe', background=COLOR_FONDO_PRINCIPAL, bordercolor=COLOR_BLANCO, borderwidth=1, relief='solid')
+        style.configure('TUI.TLabelframe.Label', background=COLOR_FONDO_PRINCIPAL, foreground=COLOR_TEXTO_PRIMARIO, font=FONT_BODY_B)
 
         # Fullscreen
         def aplicar_kiosco():
@@ -658,18 +570,20 @@ class RedTeamApp(tk.Tk):
         self.configure(bg=COLOR_FONDO_PRINCIPAL)
 
         # 1. Contenedor del borde rojo con un padx/pady externo (separa el borde de la pantalla)
-        self.border_frame = tk.Frame(self, bg=COLOR_BOTON_ROJO)
-        self.border_frame.pack(fill='both', expand=True, padx=4, pady=4) # <-- Espacio exterior
+        # Configura el fondo de la ventana raíz en negro para el margen exterior
+        self.configure(bg=COLOR_FONDO_PRINCIPAL)
+
+        # 1. Contenedor del borde blanco TUI (línea de 1px real)
+        self.border_frame = tk.Frame(self, bg=COLOR_BORDE)
+        self.border_frame.pack(fill='both', expand=True, padx=2, pady=2)
 
         # 2. Main frame insertado DENTRO del border_frame
         self.main_frame = ttk.Frame(self.border_frame, style='Dark.TFrame')
-        
-        # 3. El padx/pady interno aquí define puramente el grosor de la línea roja
-        self.main_frame.pack(fill='both', expand=True, padx=2, pady=2) # <-- Grosor de la línea
+        self.main_frame.pack(fill='both', expand=True, padx=1, pady=1)
 
         self.back_btn = None
         self.mostrar_splash_screen()
-    # ---------------- helpers de navegación ----------------
+
     def limpiar_main_frame(self):
         if self._console_after_id is not None:
             self.after_cancel(self._console_after_id)
@@ -682,35 +596,33 @@ class RedTeamApp(tk.Tk):
         gc.collect()
 
     def agregar_boton_atras(self, callback):
-        self.back_btn = ttk.Button(self.main_frame, text="← Atrás", style='Gray.TButton',
-                                   width=8, command=callback)
+        self.back_btn = ttk.Button(self.main_frame, text="< VOLVER", style='TUI.TButton',
+                                   width=10, command=callback)
         self.back_btn.pack(anchor="nw", padx=2, pady=2)
 
     def mostrar_consola(self, parent=None):
-        """Consola dinámica con scrollbar y soporte táctil para la pantalla de 2.4 pulgadas."""
+        """Consola dinámica con scrollbar y soporte táctil."""
         if parent is None:
             parent = self.main_frame
             
-        # Contenedor aislado con fondo casi negro (#050505) y borde visible (#333333)
-        self.console_frame = tk.Frame(parent, bg='#050505', 
-                                      highlightbackground="#333333", highlightcolor="#333333", 
-                                      highlightthickness=1)
-        self.console_frame.pack(fill='x', padx=5, pady=6)
+        # Contenedor LabelFrame que simula las cajas ASCII con el título en línea
+        self.console_labelframe = ttk.LabelFrame(parent, text="[ TERMINAL ]", style='TUI.TLabelframe')
+        self.console_labelframe.pack(fill='x', padx=4, pady=4)
 
-        # Terminal text-box con fuente en negrita (bold)
-        self.console_textbox = tk.Text(self.console_frame, height=4, bg='#050505',
+        # Terminal text-box anidado dentro del borde
+        self.console_textbox = tk.Text(self.console_labelframe, height=4, bg=COLOR_FONDO_PRINCIPAL,
                                        fg=COLOR_TEXTO_TERMINAL, font=('Courier', 9, 'bold'),
                                        state='disabled', highlightthickness=0,
                                        borderwidth=0, relief='flat')
                                        
-        self.console_scrollbar = ttk.Scrollbar(self.console_frame, orient="vertical", 
+        self.console_scrollbar = ttk.Scrollbar(self.console_labelframe, orient="vertical", 
                                                command=self.console_textbox.yview,
                                                style='Dark.Vertical.TScrollbar')
                                                
         self.console_textbox.configure(yscrollcommand=self.console_scrollbar.set)
         
         self.console_scrollbar.pack(side="right", fill="y")
-        # Padding interno ligero en la caja de texto para que las letras no toquen el borde
+        # Padding interno ligero para separar las letras del borde
         self.console_textbox.pack(side="left", fill="x", expand=True, padx=(4, 0), pady=2)
 
         self.console_textbox.bind("<Button-1>", self._on_console_touch_start)
@@ -963,11 +875,12 @@ class RedTeamApp(tk.Tk):
 
             # Control de espaciado: Un salto de línea '\n' al inicio del texto del botón empuja
             # limpiamente el título hacia abajo del icono, cumpliendo con la separación vertical exacta
-            texto_con_espacio = f"\n{texto}"
+            # Control de espaciado y formato TUI
+            texto_con_espacio = f"\n[ {texto.upper()} ]"
 
-            # Construcción del botón integrado (Icono arriba, Texto abajo)
+            # Construcción del botón integrado
             btn = ttk.Button(grid_frame, text=texto_con_espacio, image=photo, compound="top",
-                             style='AppIcon.TButton', command=comando)
+                             style='TUI.TButton', command=comando)
             
             # El parámetro sticky="nsew" asegura que el botón se expanda para rellenar toda la celda táctil
             btn.grid(row=fila, column=columna, padx=padding_celda, pady=padding_celda, sticky="nsew")
