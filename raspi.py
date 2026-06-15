@@ -1270,7 +1270,6 @@ class RedTeamApp(tk.Tk):
         scroll_wifi.pack(fill='both', expand=True, padx=2, pady=2)
         
         opciones = [
-            ("Activar Monitor", self._wifi_modo_monitor),
             ("Clientes Conectados", self._wifi_client_list), 
             ("Captura Handshake", self._wifi_captura_handshake),
             ("Ataque Evil Twin", self._wifi_evil_twin),
@@ -1284,31 +1283,6 @@ class RedTeamApp(tk.Tk):
             scroll_wifi.add_button(text=texto, command=cmd, style='Red.TButton', width=28)
             
         self.mostrar_consola(parent=scroll_wifi.scrollable_frame)
-
-    def _wifi_modo_monitor(self):
-        self.limpiar_main_frame()
-        self.agregar_boton_atras(self.show_wifi_menu)
-        ttk.Label(self.main_frame, text="MODO MONITOR", style='Title.TLabel').pack(pady=2)
-        interfaces = self.obtener_interfaces_red()
-        
-        scroll = ScrollableFrame(self.main_frame, max_items=10)
-        scroll.pack(fill='both', expand=True, padx=2, pady=2)
-        
-        if not interfaces:
-            ttk.Label(scroll.scrollable_frame, text="No hay interfaces.", style='Dark.TLabel').pack()
-            return
-            
-        for iface in interfaces:
-            def comando_iface(i=iface):
-                subprocess.run(["sudo", "airmon-ng", "check", "kill"],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                subprocess.run(["sudo", "airmon-ng", "start", i],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                self.ejecutar_comando(f"sudo airmon-ng start {i}",
-                                     callback_after=lambda: self.escribir_consola("[+] Hecho."))
-            scroll.add_button(text=f"Start {iface}", command=comando_iface, style='Red.TButton', width=28)
-            
-        self.mostrar_consola(parent=scroll.scrollable_frame)
 
     def _generar_nombre_temporal(self, prefijo):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
