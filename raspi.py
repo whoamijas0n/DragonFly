@@ -1273,8 +1273,7 @@ class RedTeamApp(tk.Tk):
             ("Clientes Conectados", self._wifi_client_list), 
             ("Captura Handshake", self._wifi_captura_handshake),
             ("Ataque Evil Twin", self._wifi_evil_twin),
-            ("Desautenticación", self._wifi_deauth),
-            ("Deauth Múltiple (Dual‑Band)", self._wifi_deauth_multi),
+            ("Ataque Deauth", self._wifi_deauth_menu), 
             ("Explorar Handshakes", self._wifi_explorar_handshakes),
             ("Explorar Evil Twin", self._wifi_explorar_evil),
             ("Explorar Clientes", self._wifi_explorar_clientes), 
@@ -1283,6 +1282,22 @@ class RedTeamApp(tk.Tk):
             scroll_wifi.add_button(text=texto, command=cmd, style='Red.TButton', width=28)
             
         self.mostrar_consola(parent=scroll_wifi.scrollable_frame)
+
+
+    def _wifi_deauth_menu(self):
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(self.show_wifi_menu)
+        ttk.Label(self.main_frame, text="MENÚ DEAUTH", style='Title.TLabel').pack(pady=2)
+
+        scroll = ScrollableFrame(self.main_frame, max_items=10)
+        scroll.pack(fill='both', expand=True, padx=2, pady=2)
+
+        ttk.Label(scroll.scrollable_frame, text="Seleccione modalidad:", style='Gray.TLabel').pack(pady=(0, 4))
+
+        scroll.add_button(text="Single-band (1 Interfaz)", command=self._wifi_deauth, style='Red.TButton', width=28)
+        scroll.add_button(text="Dual-band (2 Interfaces)", command=self._wifi_deauth_multi, style='Danger.TButton', width=28)
+
+        self.mostrar_consola(parent=scroll.scrollable_frame)
 
     def _generar_nombre_temporal(self, prefijo):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -1926,7 +1941,7 @@ if __name__ == "__main__":
 
     def _wifi_deauth(self):
         self.limpiar_main_frame()
-        self.agregar_boton_atras(self.show_wifi_menu)
+        self.agregar_boton_atras(self._wifi_deauth_menu)
         ttk.Label(self.main_frame, text="DEAUTH - IFace", style='Title.TLabel').pack(pady=2)
         
         scroll = ScrollableFrame(self.main_frame, max_items=10)
@@ -2146,7 +2161,7 @@ if __name__ == "__main__":
     def _wifi_deauth_multi(self):
         """Punto de entrada: muestra interfaces disponibles (debe haber al menos 2)."""
         self.limpiar_main_frame()
-        self.agregar_boton_atras(self.show_wifi_menu)
+        self.agregar_boton_atras(self._wifi_deauth_menu)
         ttk.Label(self.main_frame, text="DEAUTH DUAL‑BAND", style='Title.TLabel').pack(pady=2)
 
         interfaces = self.obtener_interfaces_red()
