@@ -2787,26 +2787,34 @@ if __name__ == "__main__":
         self.agregar_boton_atras(self.show_wifi_menu)   # botón atrás también restaura
         ttk.Label(self.main_frame, text="RESULTADOS DUAL", style='Title.TLabel').pack(pady=2)
 
-        scroll = ScrollableFrame(self.main_frame, max_items=80)
+        # Reducimos los items ya que los datos visuales pasarán a estar en la consola inferior
+        scroll = ScrollableFrame(self.main_frame, max_items=15)
         scroll.pack(fill='both', expand=True, padx=5, pady=2)
 
-        for red, macs in resultados:
-            ttk.Label(scroll.scrollable_frame,
-                    text=f"{red['essid']} ({red['banda']}) - {len(macs)} clientes",
-                    style='Mono.TLabel', foreground=COLOR_TEXTO_EXITO).pack(anchor='w', padx=5, pady=(8,2))
-            if macs:
-                for mac in macs:
-                    ttk.Label(scroll.scrollable_frame, text=f"  {mac}", style='Gray.TLabel').pack(anchor='w', padx=15)
-            else:
-                ttk.Label(scroll.scrollable_frame, text="  (ninguno)", style='Gray.TLabel').pack(anchor='w', padx=15)
+        def action_save_restore():
+            # Bloquear botón para que se ponga gris y no se pueda pulsar dos veces
+            btn_save.config(style='Gray.TButton')
+            btn_save.state(['disabled'])
+            
+            # Restaurar la interfaz (los datos de dualband ya se guardaron en background)
+            self._wifi_client_restore()
 
         # Botón que restaura la red y vuelve al menú WiFi
-        scroll.add_button(text="Guardar y volver al menú", command=self._wifi_client_restore, style='Red.TButton', width=28)
+        btn_save = scroll.add_button(text="Guardar y volver al menú", command=action_save_restore, style='Red.TButton', width=28)
 
         self.mostrar_consola(parent=scroll.scrollable_frame)
-        self.escribir_consola("[+] Enumeración dual completada. Datos en Resultados_Clientes/")
-        gc.collect()
+        self.escribir_consola("[+] Enumeración dual completada. Datos guardados en Resultados_Clientes/")
+        
+        # Inyectar todos los resultados en la terminal roja
+        for red, macs in resultados:
+            self.escribir_consola(f"\n[+] {red['essid']} ({red['banda']}) - {len(macs)} clientes")
+            if macs:
+                for mac in macs:
+                    self.escribir_consola(f"  -> {mac}")
+            else:
+                self.escribir_consola("  -> (ninguno)")
 
+        gc.collect()
 
     def _wifi_client_select_target(self, red, iface_mon):
         self.limpiar_main_frame()
@@ -2879,13 +2887,7 @@ if __name__ == "__main__":
                     try: os.remove(f"{scan_prefix}{ext}")
                     except: pass
 
-            timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-            res_dir = os.path.join(BASE_DIR_CLIENTS, f"Clientes-{timestamp}")
-            os.makedirs(res_dir, exist_ok=True)
-            with open(os.path.join(res_dir, "clientes.txt"), "w") as f:
-                f.write(f"ESSID: {red['essid']}\nBSSID: {red['bssid']}\n\nCLIENTES CONECTADOS:\n")
-                f.write("\n".join(clientes) if clientes else "No se detectaron clientes activos.")
-
+            # Ya no guardamos el archivo aquí, solo enviamos la info a la vista final
             self.enum_proc = None
             self.after(0, lambda: self._wifi_client_show_results(clientes, red))
 
@@ -2983,9 +2985,35 @@ if __name__ == "__main__":
             for mac in clientes:
                 scroll.add_button(text=f"{mac} (Desconocido)", command=lambda: None, style='Gray.TButton', width=28)
 
-        scroll.add_button(text="Guardar y volver", command=self._wifi_client_restore, style='Red.TButton', width=28)
+        # Lógica anidada que se ejecuta estrictamente al pulsar el botón
+        def action_save_restore():
+            # 1. Bloquear el botón instantáneamente (Gris + Desactivado)
+            btn_save.config(style='Gray.TButton')
+            btn_save.state(['disabled'])
+
+            # 2. Proceder a crear el directorio y archivo de guardado de forma segura
+            try:
+                timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+                # Estandarizado con el prefijo Clientes_Single para asegurar consistencia en el explorador
+                res_dir = os.path.join(BASE_DIR_CLIENTS, f"Clientes_Single-{timestamp}")
+                os.makedirs(res_dir, exist_ok=True)
+                
+                with open(os.path.join(res_dir, "clientes.txt"), "w") as f:
+                    f.write(f"ESSID: {red['essid']}\nBSSID: {red['bssid']}\n\nCLIENTES CONECTADOS:\n")
+                    f.write("\n".join(clientes) if clientes else "No se detectaron clientes activos.")
+                
+                self.escribir_consola(f"[+] Resultados guardados en {res_dir}/")
+            except Exception as e:
+                self.escribir_consola(f"[!] Error de escritura al guardar: {e}")
+
+            # 3. Restaurar NetworkManager y la conexión WiFi
+            self._wifi_client_restore()
+
+        # Botón con la lógica vinculada estandarizada
+        btn_save = scroll.add_button(text="Guardar y volver", command=action_save_restore, style='Red.TButton', width=28)
+        
         self.mostrar_consola(parent=scroll.scrollable_frame)
-        self.escribir_consola(f"[+] Total clientes: {len(clientes)}. Resultados guardados en {BASE_DIR_CLIENTS}/")
+        self.escribir_consola(f"[+] Total clientes: {len(clientes)}. Pulse Guardar y volver.")
         gc.collect()
 
     def _wifi_client_restore(self):
