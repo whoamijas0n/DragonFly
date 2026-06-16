@@ -378,35 +378,59 @@ class TecladoCompleto(tk.Toplevel):
         super().__init__(parent)
         self.variable_destino = variable_destino
         
-        # Configuración como modal Kiosco
         self.title(titulo)
         self.configure(bg=COLOR_FONDO_PRINCIPAL)
         self.attributes('-topmost', True)
         self.overrideredirect(True)
         
-        # Adaptar al tamaño y posición exactos de la ventana padre
         w = parent.winfo_width()
         h = parent.winfo_height()
         x = parent.winfo_x()
         y = parent.winfo_y()
         self.geometry(f"{w}x{h}+{x}+{y}")
 
-        # Contenedor Principal
+        # --- ESCALADO DINÁMICO DE FUENTE Y PADDING ---
+        if w <= 320:
+            self.kb_font = ('Courier', 8, 'bold')
+            self.ent_font = ('Helvetica', 10, 'bold')
+            self.kb_pad = (0, 2)
+        elif w <= 480:
+            self.kb_font = ('Courier', 10, 'bold')
+            self.ent_font = ('Helvetica', 14, 'bold')
+            self.kb_pad = (1, 6)
+        else:
+            self.kb_font = ('Courier', 14, 'bold')
+            self.ent_font = ('Helvetica', 18, 'bold')
+            self.kb_pad = (4, 10)
+
+        # Generar estilos locales para este teclado que no deformen las celdas
+        style = ttk.Style()
+        style.configure('KbGray.TButton', font=self.kb_font, padding=self.kb_pad,
+                        background=COLOR_BOTON_GRIS, foreground=COLOR_TEXTO_PRIMARIO, relief='flat')
+        style.map('KbGray.TButton', background=[('pressed', '#0f0f0f'), ('active', COLOR_BOTON_GRIS_HOVER)],
+                  foreground=[('pressed', '#888888'), ('active', 'white')])
+
+        style.configure('KbRed.TButton', font=self.kb_font, padding=self.kb_pad,
+                        background=COLOR_BOTON_ROJO, foreground='white', relief='flat')
+        style.map('KbRed.TButton', background=[('pressed', '#660005'), ('active', COLOR_BOTON_HOVER)])
+
+        style.configure('KbDanger.TButton', font=self.kb_font, padding=self.kb_pad,
+                        background=COLOR_BOTON_PELIGRO, foreground='#0c0c0c', relief='flat')
+        style.map('KbDanger.TButton', background=[('pressed', '#8a4a00'), ('active', COLOR_BOTON_PELIGRO_HOVER)])
+
         main_frame = ttk.Frame(self, style='Dark.TFrame')
         main_frame.pack(fill='both', expand=True, padx=2, pady=2)
 
-        # Barra superior con título corto y Display
         top_frame = ttk.Frame(main_frame, style='Dark.TFrame')
         top_frame.pack(fill='x', pady=(0, 2))
         
         ttk.Label(top_frame, text=titulo[:15], style='Gray.TLabel').pack(side='left', padx=2)
         
         self.display_var = tk.StringVar(value="")
-        display = ttk.Entry(top_frame, textvariable=self.display_var, font=('Helvetica', 12, 'bold'), 
+        display = ttk.Entry(top_frame, textvariable=self.display_var, font=self.ent_font, 
                             justify='center', style='Dark.TEntry')
         display.pack(side='right', fill='x', expand=True)
 
-        # Contenedor apilado para los teclados (tkraise para no consumir CPU reconstruyendo)
         self.kb_container = ttk.Frame(main_frame, style='Dark.TFrame')
         self.kb_container.pack(fill='both', expand=True)
         self.kb_container.grid_rowconfigure(0, weight=1)
@@ -419,60 +443,68 @@ class TecladoCompleto(tk.Toplevel):
             self.frames_teclado[modo] = frame
             self._construir_teclas(frame, modo)
 
-        # Iniciar en minúsculas
         self.cambiar_modo("minusculas")
 
     def cambiar_modo(self, modo):
         self.frames_teclado[modo].tkraise()
 
     def _construir_teclas(self, parent_frame, modo):
+        # SISTEMA DE GRID UNIFICADO DE 20 COLUMNAS: Permite offset y teclas anchas (ej. barra espaciadora)
+        # Formato: (Texto de Tecla, Span de Columnas)
         if modo == "minusculas":
             filas = [
-                ['q','w','e','r','t','y','u','i','o','p'],
-                ['a','s','d','f','g','h','j','k','l'],
-                ['z','x','c','v','b','n','m','DEL'],
-                ['MAYUS', '123', 'ESPACIO', 'CANCEL', 'OK']
+                [('q',2),('w',2),('e',2),('r',2),('t',2),('y',2),('u',2),('i',2),('o',2),('p',2)],
+                [('pad',1),('a',2),('s',2),('d',2),('f',2),('g',2),('h',2),('j',2),('k',2),('l',2),('pad',1)],
+                [('pad',1),('z',2),('x',2),('c',2),('v',2),('b',2),('n',2),('m',2),('DEL',4),('pad',1)],
+                [('MAYUS',3), ('123',3), ('ESPACIO',8), ('CANCEL',3), ('OK',3)]
             ]
         elif modo == "mayusculas":
             filas = [
-                ['Q','W','E','R','T','Y','U','I','O','P'],
-                ['A','S','D','F','G','H','J','K','L'],
-                ['Z','X','C','V','B','N','M','DEL'],
-                ['minus', '123', 'ESPACIO', 'CANCEL', 'OK']
+                [('Q',2),('W',2),('E',2),('R',2),('T',2),('Y',2),('U',2),('I',2),('O',2),('P',2)],
+                [('pad',1),('A',2),('S',2),('D',2),('F',2),('G',2),('H',2),('J',2),('K',2),('L',2),('pad',1)],
+                [('pad',1),('Z',2),('X',2),('C',2),('V',2),('B',2),('N',2),('M',2),('DEL',4),('pad',1)],
+                [('minus',3), ('123',3), ('ESPACIO',8), ('CANCEL',3), ('OK',3)]
             ]
         else: # simbolos
             filas = [
-                ['1','2','3','4','5','6','7','8','9','0'],
-                ['!','@','#','$','%','&','*','-','_','+'],
-                ['=','/','?','¡','.','"',"'",'DEL'],
-                ['abc', 'MAYUS', 'ESPACIO', 'CANCEL', 'OK']
+                [('1',2),('2',2),('3',2),('4',2),('5',2),('6',2),('7',2),('8',2),('9',2),('0',2)],
+                [('!',2),('@',2),('#',2),('$',2),('%',2),('&',2),('*',2),('-',2),('_',2),('+',2)],
+                [('pad',1),('=',2),('/',2),('?',2),('¡',2),('.',2),('"',2),("'",2),('DEL',4),('pad',1)],
+                [('abc',3), ('MAYUS',3), ('ESPACIO',8), ('CANCEL',3), ('OK',3)]
             ]
 
-        # Configurar las 4 filas para que ocupen todo el alto disponible
-        for i, fila in enumerate(filas):
+        # Configurar 4 filas uniformes
+        for i in range(4):
             parent_frame.grid_rowconfigure(i, weight=1)
-            
-            # Sub-frame para cada fila
-            f = ttk.Frame(parent_frame, style='Dark.TFrame')
-            f.grid(row=i, column=0, sticky='nsew', pady=1)
-            
-            # Repartir el espacio equitativamente entre las teclas de esta fila
-            for j in range(len(fila)):
-                f.grid_columnconfigure(j, weight=1)
-                
-            for j, tecla in enumerate(fila):
-                if tecla in ('OK', 'CANCEL', 'DEL'):
-                    estilo = 'Red.TButton'
-                elif tecla in ('MAYUS', 'minus', '123', 'abc', 'ESPACIO'):
-                    estilo = 'Danger.TButton'
-                else:
-                    estilo = 'Gray.TButton'
+        
+        # Configurar 20 columnas elásticas y uniformes
+        for j in range(20):
+            parent_frame.grid_columnconfigure(j, weight=1)
 
-                # Al usar width=2 forzamos al botón a ignorar su ancho por defecto 
-                # permitiendo que el 'grid' (sticky='nsew') lo estire o encoja matemáticamente
-                btn = ttk.Button(f, text=tecla, style=estilo, width=2,
-                                 command=lambda t=tecla: self._procesar_tecla(t))
-                btn.grid(row=0, column=j, sticky='nsew', padx=1)
+        for i, fila in enumerate(filas):
+            current_col = 0
+            for (tecla, span) in fila:
+                if tecla == 'pad':
+                    # Frame vacío transparente para rellenar los espacios muertos del Offset
+                    frm = ttk.Frame(parent_frame, style='Dark.TFrame')
+                    frm.grid(row=i, column=current_col, columnspan=span, sticky='nsew')
+                else:
+                    if tecla in ('OK', 'CANCEL', 'DEL'):
+                        estilo = 'KbRed.TButton'
+                    elif tecla in ('MAYUS', 'minus', '123', 'abc', 'ESPACIO'):
+                        estilo = 'KbDanger.TButton'
+                    else:
+                        estilo = 'KbGray.TButton'
+
+                    # Modificación estética, para que la barra espaciadora solo sea un bloque visual o el texto limpio
+                    display_text = " " if tecla == 'ESPACIO' else tecla
+
+                    btn = ttk.Button(parent_frame, text=display_text, style=estilo,
+                                     command=lambda t=tecla: self._procesar_tecla(t))
+                    
+                    btn.grid(row=i, column=current_col, columnspan=span, sticky='nsew', padx=1, pady=1)
+
+                current_col += span
 
     def _procesar_tecla(self, tecla):
         actual = self.display_var.get()
@@ -480,7 +512,7 @@ class TecladoCompleto(tk.Toplevel):
             self.variable_destino.set(actual)
             self.destroy()
         elif tecla == 'CANCEL':
-            self.variable_destino.set("CANCELADO") # Flag interno
+            self.variable_destino.set("CANCELADO") # Flag interno de seguridad
             self.destroy()
         elif tecla == 'DEL':
             self.display_var.set(actual[:-1])
@@ -494,6 +526,7 @@ class TecladoCompleto(tk.Toplevel):
             self.cambiar_modo("simbolos")
         else:
             self.display_var.set(actual + tecla)
+
 
 def crear_card(parent, titulo=None, color_borde=None):
     """
