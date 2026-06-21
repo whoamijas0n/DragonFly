@@ -4010,52 +4010,114 @@ if __name__ == "__main__":
         threading.Thread(target=destruir, daemon=True).start()
 
 
-
     # ==========================================
     # MENÚ SUB-1GHZ ARSENAL
     # ==========================================
+    def _ensure_sub1ghz(self, force_reconnect=False):
+        """Verifica o restablece la conexión con el gadget Sub-1GHz aislando la UI."""
+        msg = None
+        try:
+            # Si se fuerza reconexión o no existe el controlador, inicializarlo
+            if force_reconnect or not hasattr(self, 'sub1ghz_ctrl') or self.sub1ghz_ctrl is None or self.sub1ghz_ctrl.ser is None:
+                
+                # Cerrar el anterior limpiamente si existía para evitar hilos zombis
+                if hasattr(self, 'sub1ghz_ctrl') and self.sub1ghz_ctrl:
+                    self.sub1ghz_ctrl.close()
+
+                from modules.sub1ghz_logic import Sub1GHzController
+                self.sub1ghz_ctrl = Sub1GHzController(callback=self.sub1ghz_callback)
+
+                # --- FORZAR MINI REINICIO (DTR/RTS) ---
+                # Al manipular los pines DTR y RTS, forzamos al chip serial (ej. CH340/CP2102) 
+                # a resetear físicamente el ESP32 para asegurar un estado de conexión 100% limpio.
+                if self.sub1ghz_ctrl.ser and self.sub1ghz_ctrl.ser.is_open:
+                    self.sub1ghz_ctrl.ser.dtr = False
+                    self.sub1ghz_ctrl.ser.rts = False
+                    time.sleep(0.1)
+                    self.sub1ghz_ctrl.ser.dtr = True
+                    self.sub1ghz_ctrl.ser.rts = True
+                    time.sleep(0.5) # Esperar a que el firmware del ESP32 inicie
+                    
+            self.sub1ghz_available = (self.sub1ghz_ctrl is not None and self.sub1ghz_ctrl.ser is not None)
+            
+            if self.sub1ghz_available:
+                msg = "[+] Gadget Sub-1GHz conectado, reiniciado y listo."
+            else:
+                msg = "[!] Gadget Sub-1GHz no detectado."
+        except Exception as e:
+            self.sub1ghz_ctrl = None
+            self.sub1ghz_available = False
+            msg = f"[!] Error inicializando gadget Sub-1GHz: {e}"
+            
+        if msg:
+            self.after(0, lambda m=msg: self.escribir_consola(m))
+            
+        return self.sub1ghz_available
+
     def show_sub1ghz_menu(self):
-        """Pantalla principal del módulo Sub‑1GHz."""
+        """Pantalla de carga inicial del módulo Sub‑1GHz."""
         self.limpiar_main_frame()
-        self.agregar_boton_atras(self._sub1ghz_back)  # Botón atrás personalizado que cierra el controlador
+        self.agregar_boton_atras(self.show_inicio_menu)
         ttk.Label(self.main_frame, text="SUB-1GHZ ARSENAL", style='Title.TLabel').pack(pady=(2, 1))
 
-        # Crear el controlador si no existe o reconectar si falló
-        if not hasattr(self, 'sub1ghz_ctrl') or self.sub1ghz_ctrl is None or self.sub1ghz_ctrl.ser is None:
-            self.sub1ghz_ctrl = Sub1GHzController(callback=self.sub1ghz_callback)
-        if self.sub1ghz_ctrl.ser is None:
-            self.escribir_consola("[!] ESP32 no detectado. Conecta el dispositivo y reingresa al menú.")
+        # Pantalla de carga mientras busca y reinicia el dispositivo en segundo plano
+        loading_lbl = ttk.Label(self.main_frame, text="Detectando y reiniciando puerto USB...", style='Gray.TLabel')
+        loading_lbl.pack(pady=20)
+
+        def async_check():
+            connected = self._ensure_sub1ghz(force_reconnect=True)
+            self.after(0, lambda: self._build_sub1ghz_interface(connected, loading_lbl))
+
+        threading.Thread(target=async_check, daemon=True).start()
+
+    def _build_sub1ghz_interface(self, connected, loading_lbl=None):
+        """Construye la UI dependiendo de si el gadget está conectado o no."""
+        if loading_lbl is not None and loading_lbl.winfo_exists():
+            loading_lbl.destroy()
+
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(self._sub1ghz_back)
+        ttk.Label(self.main_frame, text="SUB-1GHZ ARSENAL", style='Title.TLabel').pack(pady=(2, 1))
+
+        scroll_sub1ghz = ScrollableFrame(self.main_frame, max_items=10)
+        scroll_sub1ghz.pack(fill='both', expand=True, padx=2, pady=2)
+
+        # Indicador visual de estado
+        status_txt = "Conectado" if connected else "Desconectado"
+        status_clr = "#00ff00" if connected else "#ff4d4d" # Verde o Rojo
+        ttk.Label(scroll_sub1ghz.scrollable_frame, text=f"Estado: {status_txt}",
+                  foreground=status_clr, font=FONT_BODY_B).pack(pady=(2, 10))
+
+        if connected:
+            # Botones cuando está conectado
+            scroll_sub1ghz.add_button(text="Sniffer 433MHz", command=self.sub1ghz_ctrl.start_sniff, style='Red.TButton', width=28)
+            scroll_sub1ghz.add_button(text="Jammer Activo (10s)", command=lambda: self.sub1ghz_ctrl.start_jam(10), style='Danger.TButton', width=28)
+            scroll_sub1ghz.add_button(text="Ataque Rolljam", command=self.sub1ghz_ctrl.start_rolljam, style='Danger.TButton', width=28)
+            scroll_sub1ghz.add_button(text="Detener Todo", command=self.sub1ghz_ctrl.stop_all, style='Gray.TButton', width=28)
+            scroll_sub1ghz.add_button(text="Transmitir Código (Manual)", command=self._sub1ghz_manual_tx, style='Gray.TButton', width=28)
+            
+            # Botón de reconexión/reset cuando ya está conectado
+            scroll_sub1ghz.add_button(text="Reconectar / Reset", command=self._async_reconnect_sub1ghz, style='Gray.TButton', width=28)
         else:
-            self.escribir_consola("[+] ESP32 listo. Selecciona un ataque.")
+            # Botones cuando no está conectado
+            ttk.Label(scroll_sub1ghz.scrollable_frame, text="Conecta el ESP32 (Sub-1GHz) por USB.", style='Dark.TLabel').pack(pady=5)
+            # Botón para buscar cuando no está conectado
+            scroll_sub1ghz.add_button(text="Buscar Dispositivo", command=self._async_reconnect_sub1ghz, style='Red.TButton', width=28)
 
-        # --- Botones de acción grandes (táctiles) ---
-        button_frame = ttk.Frame(self.main_frame, style='Dark.TFrame')
-        button_frame.pack(fill='x', padx=5, pady=2)
-
-        btn_sniff = ttk.Button(button_frame, text="Sniffer 433MHz", style='Red.TButton',
-                               command=self.sub1ghz_ctrl.start_sniff)
-        btn_sniff.pack(fill='x', pady=3, ipady=4)
-
-        btn_jam = ttk.Button(button_frame, text="Jammer Activo (10s)", style='Danger.TButton',
-                             command=lambda: self.sub1ghz_ctrl.start_jam(10))
-        btn_jam.pack(fill='x', pady=3, ipady=4)
-
-        btn_rolljam = ttk.Button(button_frame, text="Ataque Rolljam", style='Danger.TButton',
-                                 command=self.sub1ghz_ctrl.start_rolljam)
-        btn_rolljam.pack(fill='x', pady=3, ipady=4)
-
-        btn_stop = ttk.Button(button_frame, text="Detener Todo", style='Gray.TButton',
-                              command=self.sub1ghz_ctrl.stop_all)
-        btn_stop.pack(fill='x', pady=3, ipady=4)
-
-        # --- Bonus: Transmitir código manual ---
-        btn_tx = ttk.Button(button_frame, text="Transmitir Código (Manual)", style='Gray.TButton',
-                            command=self._sub1ghz_manual_tx)
-        btn_tx.pack(fill='x', pady=3, ipady=4)
-
-        # Consola de logs
-        self.mostrar_consola(parent=self.main_frame)
+        # Consola de logs en la parte inferior
+        self.mostrar_consola(parent=scroll_sub1ghz.scrollable_frame)
         gc.collect()
+
+    def _async_reconnect_sub1ghz(self):
+        """Maneja la reconexión manual forzando la limpieza y reinicio del puerto."""
+        self.escribir_consola("[*] Buscando y reiniciando dispositivo Sub-1GHz...")
+        def do_reconnect():
+            connected = self._ensure_sub1ghz(force_reconnect=True)
+            if not connected:
+                self.after(0, lambda: self.escribir_consola("[!] No se detectó el hardware Sub-1GHz."))
+            self.after(0, lambda: self._build_sub1ghz_interface(connected, None))
+            
+        threading.Thread(target=do_reconnect, daemon=True).start()
 
     def _sub1ghz_back(self):
         """Vuelve al menú principal deteniendo antes el controlador."""
@@ -4065,7 +4127,6 @@ if __name__ == "__main__":
 
     def sub1ghz_callback(self, msg):
         """Callback seguro para el hilo de lectura del ESP32."""
-        # Usamos el mismo mecanismo thread-safe que escribir_consola
         self.escribir_consola(msg)
 
     def _sub1ghz_manual_tx(self):
@@ -4077,10 +4138,9 @@ if __name__ == "__main__":
         if codigo == "CANCELADO" or not codigo:
             self.escribir_consola("[*] Transmisión cancelada.")
             return
-        # TODO: Enviar el código al ESP32 cuando el firmware soporte CMD:TX
+        
         self.escribir_consola(f"[*] Código ingresado: {codigo}")
         self.escribir_consola("[!] La transmisión manual aún no está implementada en el firmware.")
-
 
     # ==========================================
     # MENÚ UTILIDADES 
