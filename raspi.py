@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, simpledialog
 from PIL import Image, ImageTk
+from modules.sub1ghz_logic import Sub1GHzController
 import subprocess
 import threading
 import os
@@ -765,7 +766,7 @@ class RedTeamApp(tk.Tk):
         self.gadget_available = False
         self._gadget_initialized = False
 
-        for d in [BASE_DIR_NMAP, BASE_DIR_WIFI, BASE_DIR_EVIL, BASE_DIR_BLE, BASE_DIR_POISON, BASE_DIR_CLIENTS]:
+        for d in [BASE_DIR_NMAP, BASE_DIR_WIFI, BASE_DIR_EVIL, BASE_DIR_BLE, BASE_DIR_POISON, BASE_DIR_CLIENTS, "Resultados_RF"]:
             os.makedirs(d, exist_ok=True)
 
         # Configura el fondo de la ventana raíz en oscuro para el margen exterior
@@ -1041,6 +1042,7 @@ class RedTeamApp(tk.Tk):
             ("MAC Changer", self.show_mac_menu, "icons/mac.png"),
             ("Auditoría WiFi", self.show_wifi_menu, "icons/wifi.png"),
             ("NRF24 Jammer", self.show_nrf_jammer_menu, "icons/jammer.png"),
+            ("Sub-1GHz", self.show_sub1ghz_menu, "icons/sub1ghz.png"),
             ("Rubber Ducky", self.show_ducky_menu, "icons/ducky.png"),
             ("PoisonTap", self.show_poison_menu, "icons/poison.png"),
             ("Utilidades OS", self.show_utils_menu, "icons/utils.png"),
@@ -1255,6 +1257,7 @@ class RedTeamApp(tk.Tk):
     # ==========================================
     # MENÚ MAC CHANGER 
     # ==========================================
+
     def show_mac_menu(self):
         self.limpiar_main_frame()
         self.agregar_boton_atras(self.show_inicio_menu)
@@ -1285,11 +1288,47 @@ class RedTeamApp(tk.Tk):
         ]
         
         for texto, cmd_gen in botones:
-            # Se usa un argumento por defecto para evitar el cierre tardío (late binding)
             scroll_mac.add_button(text=texto, command=lambda gen=cmd_gen: self.ejecutar_comando(gen()),
                                 style='Red.TButton', width=28)
+                                
+        # --- NUEVO BOTÓN: MAC Personalizada ---
+        scroll_mac.add_button(text="MAC Personalizada", command=self._mac_personalizada_ingresar,
+                              style='Danger.TButton', width=28)
 
         self.mostrar_consola(parent=scroll_mac.scrollable_frame)
+
+    def _mac_personalizada_ingresar(self):
+        """Abre el submenú del teclado, valida la MAC y ejecuta el cambio si es válida."""
+        # 1. Crear variable y llamar al teclado (actúa como el submenú superpuesto)
+        var_mac = tk.StringVar()
+        teclado = TecladoCompleto(self, var_mac, titulo="MAC (ej. 00:11...)")
+        
+        # Pausar la ejecución hasta que el usuario presione OK o CANCEL
+        self.wait_window(teclado)
+        
+        # 2. Obtener el valor ingresado y limpiar espacios
+        nueva_mac = var_mac.get().strip()
+        
+        # 3. Validar si el usuario canceló la operación o no ingresó nada
+        if nueva_mac == "CANCELADO" or not nueva_mac:
+            self.escribir_consola("[*] Ingreso de MAC cancelado.")
+            return
+            
+        # 4. Validar formato de la dirección MAC usando Expresiones Regulares (Regex)
+        # Soporta los formatos habituales separados por dos puntos (:) o guiones (-)
+        patron_mac = r"^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$"
+        
+        if not re.match(patron_mac, nueva_mac):
+            self.escribir_consola(f"[!] ERROR: '{nueva_mac}' no es un formato válido.")
+            self.escribir_consola("    Usa el formato: XX:XX:XX:XX:XX:XX")
+            return
+            
+        # 5. Ejecutar el comando en la interfaz seleccionada si pasó la validación
+        iface = self.interfaz_seleccionada.get()
+        cmd = f"sudo ifconfig {iface} down && sudo macchanger -m {nueva_mac} {iface} && sudo ifconfig {iface} up"
+        
+        self.escribir_consola(f"[*] Asignando MAC personalizada ({nueva_mac}) a {iface}...")
+        self.ejecutar_comando(cmd)
 
     # ==========================================
     # MENÚ WIFI 
@@ -3969,6 +4008,79 @@ if __name__ == "__main__":
                 self.escribir_consola(f"[!] Error: {e}")
 
         threading.Thread(target=destruir, daemon=True).start()
+
+
+
+    # ==========================================
+    # MENÚ SUB-1GHZ ARSENAL
+    # ==========================================
+    def show_sub1ghz_menu(self):
+        """Pantalla principal del módulo Sub‑1GHz."""
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(self._sub1ghz_back)  # Botón atrás personalizado que cierra el controlador
+        ttk.Label(self.main_frame, text="SUB-1GHZ ARSENAL", style='Title.TLabel').pack(pady=(2, 1))
+
+        # Crear el controlador si no existe o reconectar si falló
+        if not hasattr(self, 'sub1ghz_ctrl') or self.sub1ghz_ctrl is None or self.sub1ghz_ctrl.ser is None:
+            self.sub1ghz_ctrl = Sub1GHzController(callback=self.sub1ghz_callback)
+        if self.sub1ghz_ctrl.ser is None:
+            self.escribir_consola("[!] ESP32 no detectado. Conecta el dispositivo y reingresa al menú.")
+        else:
+            self.escribir_consola("[+] ESP32 listo. Selecciona un ataque.")
+
+        # --- Botones de acción grandes (táctiles) ---
+        button_frame = ttk.Frame(self.main_frame, style='Dark.TFrame')
+        button_frame.pack(fill='x', padx=5, pady=2)
+
+        btn_sniff = ttk.Button(button_frame, text="Sniffer 433MHz", style='Red.TButton',
+                               command=self.sub1ghz_ctrl.start_sniff)
+        btn_sniff.pack(fill='x', pady=3, ipady=4)
+
+        btn_jam = ttk.Button(button_frame, text="Jammer Activo (10s)", style='Danger.TButton',
+                             command=lambda: self.sub1ghz_ctrl.start_jam(10))
+        btn_jam.pack(fill='x', pady=3, ipady=4)
+
+        btn_rolljam = ttk.Button(button_frame, text="Ataque Rolljam", style='Danger.TButton',
+                                 command=self.sub1ghz_ctrl.start_rolljam)
+        btn_rolljam.pack(fill='x', pady=3, ipady=4)
+
+        btn_stop = ttk.Button(button_frame, text="Detener Todo", style='Gray.TButton',
+                              command=self.sub1ghz_ctrl.stop_all)
+        btn_stop.pack(fill='x', pady=3, ipady=4)
+
+        # --- Bonus: Transmitir código manual ---
+        btn_tx = ttk.Button(button_frame, text="Transmitir Código (Manual)", style='Gray.TButton',
+                            command=self._sub1ghz_manual_tx)
+        btn_tx.pack(fill='x', pady=3, ipady=4)
+
+        # Consola de logs
+        self.mostrar_consola(parent=self.main_frame)
+        gc.collect()
+
+    def _sub1ghz_back(self):
+        """Vuelve al menú principal deteniendo antes el controlador."""
+        if hasattr(self, 'sub1ghz_ctrl') and self.sub1ghz_ctrl:
+            self.sub1ghz_ctrl.close()
+        self.show_inicio_menu()
+
+    def sub1ghz_callback(self, msg):
+        """Callback seguro para el hilo de lectura del ESP32."""
+        # Usamos el mismo mecanismo thread-safe que escribir_consola
+        self.escribir_consola(msg)
+
+    def _sub1ghz_manual_tx(self):
+        """Abre el teclado virtual para introducir un código hexadecimal a transmitir."""
+        var_codigo = tk.StringVar()
+        teclado = TecladoCompleto(self, var_codigo, titulo="Código HEX a enviar")
+        self.wait_window(teclado)
+        codigo = var_codigo.get().strip()
+        if codigo == "CANCELADO" or not codigo:
+            self.escribir_consola("[*] Transmisión cancelada.")
+            return
+        # TODO: Enviar el código al ESP32 cuando el firmware soporte CMD:TX
+        self.escribir_consola(f"[*] Código ingresado: {codigo}")
+        self.escribir_consola("[!] La transmisión manual aún no está implementada en el firmware.")
+
 
     # ==========================================
     # MENÚ UTILIDADES 
