@@ -54,19 +54,23 @@ volatile SystemState currentState = IDLE;
 volatile unsigned long jammerStartTime = 0;
 volatile unsigned long jammerDuration = 0;
 
-// Variable para el comando SEND (ya NO es volatile, se accede con sincronización por bandera)
-String txDataHex = "";               
+// Variable para el comando SEND
+String txDataHex = "";
 volatile bool sendRequested = false;
 
-// Flag para interrupción de recepción
-volatile bool packetReceived = false;
+// Banderas de interrupción para recepción (ambos módulos)
+volatile bool packetReceivedRX = false;
+volatile bool packetReceivedTX = false;
 
 // ==========================================
 // 4. FUNCIONES DE INTERRUPCIÓN (ISR)
 // ==========================================
-// Esta ISR se dispara cuando el Módulo 2 (RX) detecta un paquete
 void IRAM_ATTR setFlagRX() {
-  packetReceived = true;
+  packetReceivedRX = true;
+}
+
+void IRAM_ATTR setFlagTX() {
+  packetReceivedTX = true;
 }
 
 // ==========================================
@@ -117,7 +121,7 @@ void TaskComms(void *pvParameters) {
         // Parseo del protocolo
         if (inputBuffer.startsWith("CMD:SNIFF:")) {
           currentState = SNIFFING_433;
-          updateOLED("SNIFFING", "Freq: 433 MHz");
+          updateOLED("SNIFFING", "Dual RX 433 MHz");
           safeSerialPrint("ACK:SNIFF_STARTED");
           
         } else if (inputBuffer.startsWith("CMD:JAM:")) {
@@ -133,14 +137,14 @@ void TaskComms(void *pvParameters) {
           
         } else if (inputBuffer.startsWith("CMD:SEND:")) {
           // Formato esperado: CMD:SEND:433:HEXDATA
-          int thirdColon = inputBuffer.lastIndexOf(':');          // antes del hex
-          int secondColon = inputBuffer.lastIndexOf(':', thirdColon - 1); // antes de la frecuencia
+          int thirdColon = inputBuffer.lastIndexOf(':');
+          int secondColon = inputBuffer.lastIndexOf(':', thirdColon - 1);
           if (secondColon != -1 && thirdColon != -1) {
             String hexPart = inputBuffer.substring(thirdColon + 1);
             hexPart.trim();
             if (hexPart.length() > 0) {
-              txDataHex = hexPart;               // Core 0 escribe el dato
-              sendRequested = true;              // Activa la bandera
+              txDataHex = hexPart;
+              sendRequested = true;
               safeSerialPrint("ACK:SEND_QUEUED");
             } else {
               safeSerialPrint("ERR:SEND_EMPTY");
@@ -166,8 +170,7 @@ void TaskComms(void *pvParameters) {
       }
     }
     
-    // Pequeño delay para no saturar el Watchdog del Core 0
-    vTaskDelay(10 / portTICK_PERIOD_MS); 
+    vTaskDelay(10 / portTICK_PERIOD_MS);
   }
 }
 
@@ -183,33 +186,35 @@ void TaskRF(void *pvParameters) {
       // Limpiar configuraciones anteriores
       radioTX.standby();
       radioRX.standby();
-      packetReceived = false;
+      packetReceivedRX = false;
+      packetReceivedTX = false;
       
       switch (currentState) {
         case SNIFFING_433:
-          // Configurar Modulo 2 para escuchar
+          // Configurar ambos módulos como receptores (doble sniffing)
           radioRX.setFrequency(433.92);
+          radioTX.setFrequency(433.92);
           radioRX.startReceive();
+          radioTX.startReceive();
           break;
           
         case JAMMING_433:
-          // Configurar Modulo 1 para transmitir ruido
+          // Solo el módulo 1 (TX) emite jamming
           radioTX.setFrequency(433.92);
-          // transmitDirect() emite una portadora continua (ruido) sin modular
-          radioTX.transmitDirect(); 
+          radioTX.transmitDirect();
+          // El módulo 2 (RX) se queda en standby (ya lo está)
           break;
           
         case SENDING_PACKET: {
-          // Configurar el módulo TX en 433.92 MHz
+          // Transmitir usando el módulo 1 (TX)
           radioTX.setFrequency(433.92);
           // Convertir hex string a array de bytes
           int len = txDataHex.length() / 2;
-          if (len > 0) {
+          if (len > 0 && txDataHex.length() % 2 == 0) {
             uint8_t* bytes = new uint8_t[len];
             for (int i = 0; i < len; i++) {
               bytes[i] = (uint8_t) strtol(txDataHex.substring(i*2, i*2+2).c_str(), NULL, 16);
             }
-            // Transmisión bloqueante: envía la trama completa y retorna al terminar
             int state = radioTX.transmit(bytes, len);
             delete[] bytes;
             if (state == RADIOLIB_ERR_NONE) {
@@ -218,21 +223,20 @@ void TaskRF(void *pvParameters) {
               safeSerialPrint("ERR:SEND_FAILED");
             }
           } else {
-            safeSerialPrint("ERR:SEND_EMPTY_DATA");
+            safeSerialPrint("ERR:SEND_INVALID_HEX");
           }
-          txDataHex = "";      // Limpiar el buffer
-          // Regresar inmediatamente a IDLE después del envío
+          txDataHex = "";
           currentState = IDLE;
           updateOLED("IDLE", "TX Done.");
           break;
         }
           
         case ROLLJAM_ACTIVE:
-          // Configurar ambos: Modulo 1 Jamea (offset sutil), Modulo 2 Escucha
-          radioTX.setFrequency(433.92); 
-          radioRX.setFrequency(433.92); 
-          radioTX.transmitDirect(); // Empieza a hacer ruido
-          radioRX.startReceive();   // Intenta escuchar a través del ruido
+          // Módulo 1 (TX) jamea, módulo 2 (RX) escucha
+          radioTX.setFrequency(433.92);
+          radioRX.setFrequency(433.92);
+          radioTX.transmitDirect();
+          radioRX.startReceive();
           break;
           
         case IDLE:
@@ -246,25 +250,65 @@ void TaskRF(void *pvParameters) {
     switch (currentState) {
       
       case SNIFFING_433:
-      case ROLLJAM_ACTIVE:
-        if (packetReceived) {
-          packetReceived = false;
-          String strData;
-          int state = radioRX.readData(strData);
-          
-          if (state == RADIOLIB_ERR_NONE) {
-            // Convertir la data capturada a HEX plano
-            String hexString = "";
-            for (int i = 0; i < strData.length(); i++) {
-              if (strData[i] < 16) hexString += "0";
-              hexString += String(strData[i], HEX);
+        // Procesar capturas del módulo RX
+        if (packetReceivedRX) {
+          packetReceivedRX = false;
+          size_t len = radioRX.getPacketLength();
+          if (len > 0 && len <= 256) {
+            uint8_t data[256];
+            int state = radioRX.readData(data, len);
+            if (state == RADIOLIB_ERR_NONE) {
+              String hexString = "";
+              for (size_t i = 0; i < len; i++) {
+                if (data[i] < 0x10) hexString += "0";
+                hexString += String(data[i], HEX);
+              }
+              hexString.toUpperCase();
+              safeSerialPrint("DATA:HEX:" + hexString);
             }
-            hexString.toUpperCase();
-            
-            // Enviar a la Pi Zero
-            safeSerialPrint("DATA:HEX:" + hexString);
           }
-          // Reiniciar escucha
+          radioRX.startReceive(); // reanudar
+        }
+        
+        // Procesar capturas del módulo TX (configurado también como RX)
+        if (packetReceivedTX) {
+          packetReceivedTX = false;
+          size_t len = radioTX.getPacketLength();
+          if (len > 0 && len <= 256) {
+            uint8_t data[256];
+            int state = radioTX.readData(data, len);
+            if (state == RADIOLIB_ERR_NONE) {
+              String hexString = "";
+              for (size_t i = 0; i < len; i++) {
+                if (data[i] < 0x10) hexString += "0";
+                hexString += String(data[i], HEX);
+              }
+              hexString.toUpperCase();
+              safeSerialPrint("DATA:HEX:" + hexString);
+            }
+          }
+          radioTX.startReceive(); // reanudar
+        }
+        break;
+        
+      case ROLLJAM_ACTIVE:
+        // Solo el módulo RX está recibiendo
+        if (packetReceivedRX) {
+          packetReceivedRX = false;
+          size_t len = radioRX.getPacketLength();
+          if (len > 0 && len <= 256) {
+            uint8_t data[256];
+            int state = radioRX.readData(data, len);
+            if (state == RADIOLIB_ERR_NONE) {
+              String hexString = "";
+              for (size_t i = 0; i < len; i++) {
+                if (data[i] < 0x10) hexString += "0";
+                hexString += String(data[i], HEX);
+              }
+              hexString.toUpperCase();
+              safeSerialPrint("DATA:HEX:" + hexString);
+            }
+          }
           radioRX.startReceive();
         }
         break;
@@ -278,22 +322,21 @@ void TaskRF(void *pvParameters) {
         }
         break;
         
-      // El estado SENDING_PACKET ya no necesita manejo continuo;
-      // la transmisión se completa en el bloque de cambio de estado.
-        
       case IDLE:
+        // Verificar si se solicitó un envío
+        if (sendRequested) {
+          sendRequested = false;
+          currentState = SENDING_PACKET;
+          lastState = IDLE;  // forzar la reconfiguración del módulo
+        }
+        break;
+        
+      default:
         break;
     }
     
-    // Comprobar si se solicitó un envío estando en IDLE
-    if (sendRequested && currentState == IDLE) {
-      sendRequested = false;
-      currentState = SENDING_PACKET;
-      lastState = IDLE;  // forzar la reconfiguración del módulo
-    }
-    
-    // Delay muy corto en Core 1 para respuesta rápida a RF
-    vTaskDelay(2 / portTICK_PERIOD_MS); 
+    // Delay corto para respuesta rápida
+    vTaskDelay(2 / portTICK_PERIOD_MS);
   }
 }
 
@@ -308,7 +351,7 @@ void setup() {
   Wire.begin(OLED_SDA, OLED_SCL);
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
     safeSerialPrint("ERR:OLED_NOT_FOUND");
-    while (true); // Detener si no hay pantalla (opcional)
+    while (true);
   }
   updateOLED("BOOTING...", "Init Hardware");
   
@@ -332,8 +375,9 @@ void setup() {
     while (true);
   }
   
-  // Asignar interrupción al Módulo RX (GDO0)
+  // Asignar interrupciones a ambos módulos (GDO0)
   radioRX.setGdo0Action(setFlagRX, RISING);
+  radioTX.setGdo0Action(setFlagTX, RISING);
   
   updateOLED("IDLE", "Ready.");
   safeSerialPrint("ACK:BOOT_COMPLETE");
@@ -349,5 +393,5 @@ void setup() {
 }
 
 void loop() {
-  vTaskDelete(NULL); 
+  vTaskDelete(NULL);
 }
