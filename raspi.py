@@ -4093,6 +4093,7 @@ if __name__ == "__main__":
             scroll_sub1ghz.add_button(text="Sniffer 433MHz", command=self.sub1ghz_ctrl.start_sniff, style='Red.TButton', width=28)
             scroll_sub1ghz.add_button(text="Jammer Activo (10s)", command=lambda: self.sub1ghz_ctrl.start_jam(10), style='Danger.TButton', width=28)
             scroll_sub1ghz.add_button(text="Ataque Rolljam", command=self.sub1ghz_ctrl.start_rolljam, style='Danger.TButton', width=28)
+            scroll_sub1ghz.add_button(text="Explorar y Re-Transmitir", command=self._sub1ghz_explorar_capturas, style='Danger.TButton', width=28)
             scroll_sub1ghz.add_button(text="Detener Todo", command=self.sub1ghz_ctrl.stop_all, style='Gray.TButton', width=28)
             scroll_sub1ghz.add_button(text="Transmitir Código (Manual)", command=self._sub1ghz_manual_tx, style='Gray.TButton', width=28)
             
@@ -4139,8 +4140,94 @@ if __name__ == "__main__":
             self.escribir_consola("[*] Transmisión cancelada.")
             return
         
-        self.escribir_consola(f"[*] Código ingresado: {codigo}")
-        self.escribir_consola("[!] La transmisión manual aún no está implementada en el firmware.")
+        self.escribir_consola(f"[*] Código manual ingresado: {codigo}")
+        if hasattr(self, 'sub1ghz_ctrl') and self.sub1ghz_ctrl and self.sub1ghz_ctrl.ser:
+            self.sub1ghz_ctrl.transmit_hex(codigo)
+            self.escribir_consola("[+] Comando de transmisión manual enviado.")
+        else:
+            self.escribir_consola("[!] Gadget desconectado. Imposible transmitir.")
+
+    # =======================================================
+    # EXPLORAR Y RETRANSMITIR CAPTURAS
+    # =======================================================
+    
+    def _sub1ghz_explorar_capturas(self):
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(lambda: self._build_sub1ghz_interface(connected=True))
+        ttk.Label(self.main_frame, text="CAPTURAS RF (HEX)", style='Title.TLabel').pack(pady=2)
+
+        base_dir = "Resultados_RF"
+        if not os.path.exists(base_dir):
+            os.makedirs(base_dir)
+
+        # Listar archivos txt de más reciente a más antiguo
+        archivos = sorted([f for f in os.listdir(base_dir) if f.endswith(".txt")], reverse=True)
+
+        if not archivos:
+            ttk.Label(self.main_frame, text="No hay capturas registradas.", style='Dark.TLabel').pack(pady=10)
+            return
+
+        scroll = ScrollableFrame(self.main_frame, max_items=50)
+        scroll.pack(fill='both', expand=True, padx=5, pady=2)
+
+        for archivo in archivos:
+            ruta = os.path.join(base_dir, archivo)
+            scroll.add_button(text=archivo,
+                              command=lambda r=ruta: self._sub1ghz_mostrar_opciones_captura(r),
+                              style='Gray.TButton', width=28)
+
+        self.mostrar_consola(parent=scroll.scrollable_frame)
+        gc.collect()
+
+    def _sub1ghz_mostrar_opciones_captura(self, ruta):
+        self.limpiar_main_frame()
+        self.agregar_boton_atras(self._sub1ghz_explorar_capturas)
+        
+        nombre_arch = os.path.basename(ruta)
+        ttk.Label(self.main_frame, text=f"CAPTURA:\n{nombre_arch}", style='Title.TLabel', justify='center').pack(pady=2)
+
+        try:
+            with open(ruta, 'r') as f:
+                hex_data = f.read().strip()
+        except Exception as e:
+            ttk.Label(self.main_frame, text=f"Error leyendo archivo.", style='Dark.TLabel').pack()
+            self.escribir_consola(f"[!] Error leyendo: {e}")
+            return
+
+        # Acortar el HEX para que no rompa la pantalla si es muy largo
+        display_hex = hex_data if len(hex_data) < 28 else hex_data[:25] + "..."
+        ttk.Label(self.main_frame, text=f"HEX: {display_hex}", style='Mono.TLabel', foreground=COLOR_TEXTO_EXITO).pack(pady=8)
+
+        scroll = ScrollableFrame(self.main_frame, max_items=10)
+        scroll.pack(fill='both', expand=True, padx=5, pady=2)
+
+        scroll.add_button(text="Transmitir Código (Replay)",
+                          command=lambda: self._sub1ghz_ejecutar_replay(hex_data),
+                          style='Red.TButton', width=28)
+
+        scroll.add_button(text="Eliminar Captura",
+                          command=lambda: self._sub1ghz_eliminar_captura(ruta),
+                          style='Danger.TButton', width=28)
+
+        self.mostrar_consola(parent=scroll.scrollable_frame)
+        gc.collect()
+
+    def _sub1ghz_ejecutar_replay(self, hex_data):
+        self.escribir_consola(f"[*] Preparando Replay Attack...")
+        if hasattr(self, 'sub1ghz_ctrl') and self.sub1ghz_ctrl and self.sub1ghz_ctrl.ser:
+            self.sub1ghz_ctrl.transmit_hex(hex_data)
+            self.escribir_consola(f"[+] Trama enviada correctamente al TX.")
+        else:
+            self.escribir_consola(f"[!] Gadget desconectado. Reconecte primero.")
+
+    def _sub1ghz_eliminar_captura(self, ruta):
+        try:
+            os.remove(ruta)
+            self.escribir_consola(f"[+] Captura eliminada con éxito.")
+            # Regresar al explorador tras medio segundo para dar feedback visual
+            self.after(500, self._sub1ghz_explorar_capturas)
+        except Exception as e:
+            self.escribir_consola(f"[!] Error al eliminar: {e}")
 
     # ==========================================
     # MENÚ UTILIDADES 
