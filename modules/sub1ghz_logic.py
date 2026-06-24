@@ -154,6 +154,12 @@ class Sub1GHzController:
     def stop_all(self):
         self._send("CMD:STOP")
 
+    def transmit_hex(self, hex_data, freq="433"):
+        self._send(f"CMD:SEND:{freq}:{hex_data}")
+
+    def start_sniff(self):
+        self._send("CMD:SNIFF:433")
+
     # ------------------------------------------------------------------
     # Cierre limpio
     # ------------------------------------------------------------------
