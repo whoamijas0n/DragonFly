@@ -1,9 +1,3 @@
-/*
- * DragonFly - Sub-1GHz RF Coprocessor Firmware (ESP32)
- * Arquitectura: Dual Core FreeRTOS
- * Hardware: 2x CC1101 (HSPI/VSPI), 1x OLED 0.96" (I2C)
- */
-
 #include <Arduino.h>
 #include <Wire.h>
 #include <SPI.h>
@@ -53,12 +47,16 @@ SemaphoreHandle_t serialMutex;
 // ==========================================
 // 3. MÁQUINA DE ESTADOS Y VARIABLES
 // ==========================================
-enum SystemState { IDLE, SNIFFING_433, JAMMING_433, ROLLJAM_ACTIVE };
+enum SystemState { IDLE, SNIFFING_433, JAMMING_433, SENDING_PACKET, ROLLJAM_ACTIVE };
 volatile SystemState currentState = IDLE;
 
 // Variables de control de tiempo
 volatile unsigned long jammerStartTime = 0;
 volatile unsigned long jammerDuration = 0;
+
+// Variable para el comando SEND (ya NO es volatile, se accede con sincronización por bandera)
+String txDataHex = "";               
+volatile bool sendRequested = false;
 
 // Flag para interrupción de recepción
 volatile bool packetReceived = false;
@@ -133,6 +131,24 @@ void TaskComms(void *pvParameters) {
           updateOLED("JAMMING!", "Time: " + durStr + "s");
           safeSerialPrint("ACK:JAM_STARTED");
           
+        } else if (inputBuffer.startsWith("CMD:SEND:")) {
+          // Formato esperado: CMD:SEND:433:HEXDATA
+          int thirdColon = inputBuffer.lastIndexOf(':');          // antes del hex
+          int secondColon = inputBuffer.lastIndexOf(':', thirdColon - 1); // antes de la frecuencia
+          if (secondColon != -1 && thirdColon != -1) {
+            String hexPart = inputBuffer.substring(thirdColon + 1);
+            hexPart.trim();
+            if (hexPart.length() > 0) {
+              txDataHex = hexPart;               // Core 0 escribe el dato
+              sendRequested = true;              // Activa la bandera
+              safeSerialPrint("ACK:SEND_QUEUED");
+            } else {
+              safeSerialPrint("ERR:SEND_EMPTY");
+            }
+          } else {
+            safeSerialPrint("ERR:SEND_FORMAT");
+          }
+          
         } else if (inputBuffer.startsWith("CMD:ROLLJAM:START")) {
           currentState = ROLLJAM_ACTIVE;
           updateOLED("ROLLJAM", "RX & TX Active");
@@ -182,6 +198,34 @@ void TaskRF(void *pvParameters) {
           // transmitDirect() emite una portadora continua (ruido) sin modular
           radioTX.transmitDirect(); 
           break;
+          
+        case SENDING_PACKET: {
+          // Configurar el módulo TX en 433.92 MHz
+          radioTX.setFrequency(433.92);
+          // Convertir hex string a array de bytes
+          int len = txDataHex.length() / 2;
+          if (len > 0) {
+            uint8_t* bytes = new uint8_t[len];
+            for (int i = 0; i < len; i++) {
+              bytes[i] = (uint8_t) strtol(txDataHex.substring(i*2, i*2+2).c_str(), NULL, 16);
+            }
+            // Transmisión bloqueante: envía la trama completa y retorna al terminar
+            int state = radioTX.transmit(bytes, len);
+            delete[] bytes;
+            if (state == RADIOLIB_ERR_NONE) {
+              safeSerialPrint("ACK:SEND_DONE");
+            } else {
+              safeSerialPrint("ERR:SEND_FAILED");
+            }
+          } else {
+            safeSerialPrint("ERR:SEND_EMPTY_DATA");
+          }
+          txDataHex = "";      // Limpiar el buffer
+          // Regresar inmediatamente a IDLE después del envío
+          currentState = IDLE;
+          updateOLED("IDLE", "TX Done.");
+          break;
+        }
           
         case ROLLJAM_ACTIVE:
           // Configurar ambos: Modulo 1 Jamea (offset sutil), Modulo 2 Escucha
@@ -234,8 +278,18 @@ void TaskRF(void *pvParameters) {
         }
         break;
         
+      // El estado SENDING_PACKET ya no necesita manejo continuo;
+      // la transmisión se completa en el bloque de cambio de estado.
+        
       case IDLE:
         break;
+    }
+    
+    // Comprobar si se solicitó un envío estando en IDLE
+    if (sendRequested && currentState == IDLE) {
+      sendRequested = false;
+      currentState = SENDING_PACKET;
+      lastState = IDLE;  // forzar la reconfiguración del módulo
     }
     
     // Delay muy corto en Core 1 para respuesta rápida a RF
@@ -279,25 +333,21 @@ void setup() {
   }
   
   // Asignar interrupción al Módulo RX (GDO0)
-  // Corregido: setGdo0Action requiere la función ISR y el tipo de flanco (RISING)
   radioRX.setGdo0Action(setFlagRX, RISING);
   
   updateOLED("IDLE", "Ready.");
   safeSerialPrint("ACK:BOOT_COMPLETE");
 
   // 5. Crear Tareas en los Núcleos correspondientes
-  // Core 0: UI y Serial (Prioridad 1)
   xTaskCreatePinnedToCore(
     TaskComms, "TaskComms", 4096, NULL, 1, NULL, 0
   );
   
-  // Core 1: Radiofrecuencia (Prioridad 2 - Alta prioridad)
   xTaskCreatePinnedToCore(
     TaskRF, "TaskRF", 8192, NULL, 2, NULL, 1
   );
 }
 
-// Loop vacío (FreeRTOS maneja todo a través de las tareas)
 void loop() {
   vTaskDelete(NULL); 
 }
