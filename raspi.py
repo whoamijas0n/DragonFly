@@ -4258,7 +4258,8 @@ if __name__ == "__main__":
             ("Estado de Red WiFi", self._utils_wifi_estado),
             ("Conectar Dispositivo BT", self._utils_bluetooth_seleccionar_interfaz),
             ("Estado de Adaptador BT", self._utils_bluetooth_estado),
-            ("Actualizar Sistema (APT)", self._utils_actualizar_sistema) 
+            ("Actualizar Sistema (APT)", self._utils_actualizar_sistema),
+            ("Actualizar DragonFly (firmware)", self._utils_actualizar_dragonfly)  
         ]
         
         for texto, cmd in opciones:
@@ -4425,6 +4426,58 @@ if __name__ == "__main__":
         except:
             pass
         return interfaces if interfaces else []
+
+    def _utils_actualizar_dragonfly(self):
+        # 1. Bloqueamos la interfaz para evitar interrupciones
+        self._bloquear_botones_utils()
+        self.escribir_consola("[*] Conectando con GitHub para buscar actualizaciones...")
+
+        def check_and_update():
+            import subprocess
+            import time
+            try:
+                # 2. Sincronizar información con el servidor remoto (requiere internet)
+                self.after(0, lambda: self.escribir_consola("[*] Ejecutando 'git fetch' (puede tardar)..."))
+                fetch_proc = subprocess.run(["git", "fetch"], capture_output=True, text=True)
+                
+                if fetch_proc.returncode != 0:
+                    self.after(0, lambda: self.escribir_consola("[!] Error de red. Asegúrate de estar conectado a internet vía WiFi."))
+                    self.after(0, self._desbloquear_botones_utils)
+                    return
+
+                # 3. Comparar el commit local (HEAD) con el remoto (@{u}) de forma segura
+                try:
+                    local_hash = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+                    remote_hash = subprocess.check_output(["git", "rev-parse", "@{u}"], text=True).strip()
+                except subprocess.CalledProcessError:
+                    self.after(0, lambda: self.escribir_consola("[!] Error interno. ¿El código está en un repositorio Git válido?"))
+                    self.after(0, self._desbloquear_botones_utils)
+                    return
+
+                if local_hash == remote_hash:
+                    self.after(0, lambda: self.escribir_consola("[+] DragonFly ya está en la última versión disponible."))
+                    self.after(0, self._desbloquear_botones_utils)  # No reiniciamos, solo desbloqueamos
+                else:
+                    self.after(0, lambda: self.escribir_consola("[*] ¡Actualización disponible! Descargando (git pull)..."))
+                    
+                    # 5. Aplicar la actualización
+                    pull_proc = subprocess.run(["git", "pull"], capture_output=True, text=True)
+                    
+                    if pull_proc.returncode == 0:
+                        self.after(0, lambda: self.escribir_consola("[+] Código actualizado con éxito."))
+                        self.after(0, lambda: self.escribir_consola("[!] Reiniciando la Pi en 3 segundos para aplicar cambios..."))
+                        time.sleep(3)
+                        subprocess.run(["sudo", "reboot"])
+                    else:
+                        self.after(0, lambda: self.escribir_consola(f"[!] Error al fusionar el código (posible conflicto local)."))
+                        self.after(0, self._desbloquear_botones_utils)
+
+            except Exception as e:
+                self.after(0, lambda e=e: self.escribir_consola(f"[!] Excepción inesperada: {e}"))
+                self.after(0, self._desbloquear_botones_utils)
+
+        import threading
+        threading.Thread(target=check_and_update, daemon=True).start()
 
     def _utils_wifi_seleccionar_interfaz(self):
         self.limpiar_main_frame()
