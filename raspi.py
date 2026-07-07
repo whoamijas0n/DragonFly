@@ -588,25 +588,35 @@ app_api = FastAPI(title="DragonFly Remote")
 
 HTML_HELLO_WORLD = """
 <!DOCTYPE html>
-<html>
+<html lang="es">
     <head>
+        <meta charset="UTF-8">
         <title>DragonFly Remote</title>
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
-            body { background-color: #0c0c0c; color: #ff2222; font-family: Courier, monospace; text-align: center; padding-top: 20%; }
+            body { background-color: #0c0c0c; color: #ff2222; font-family: Courier, monospace; text-align: center; padding-top: 15%; }
             h1 { font-size: 2.5em; border-bottom: 2px solid #cc0a0a; display: inline-block; padding-bottom: 10px; }
             p { color: #e2e2e2; }
-            .terminal { background: #000; padding: 15px; border: 1px solid #333; display: inline-block; margin-top: 20px; }
+            .terminal { background: #000; padding: 15px; border: 1px solid #333; display: inline-block; margin-top: 20px; width: 90%; max-width: 500px; text-align: left; }
         </style>
     </head>
     <body>
         <h1>HOLA MUNDO</h1>
         <p>Control Remoto Activo - Conexión Exitosa</p>
-        <div class="terminal" id="ws-output">Esperando conexión WebSocket...</div>
+        <div class="terminal" id="ws-output">[*] Esperando conexión WebSocket...</div>
         <script>
             var ws = new WebSocket("ws://" + location.host + "/ws");
+            var terminal = document.getElementById("ws-output");
+            
+            ws.onopen = function(event) {
+                terminal.innerText += "\\n[+] WebSocket Conectado al backend.";
+                ws.send("Cliente Web Inicializado");
+            };
             ws.onmessage = function(event) {
-                document.getElementById("ws-output").innerText = event.data;
+                terminal.innerText += "\\n> " + event.data;
+            };
+            ws.onerror = function(event) {
+                terminal.innerText += "\\n[!] Error en la conexión WebSocket.";
             };
         </script>
     </body>
@@ -624,14 +634,16 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         while True:
             data = await websocket.receive_text()
-            await websocket.send_text(f"Recibido: {data}")
-    except:
-        pass
+            await websocket.send_text(f"Recibido en Pi: {data}")
+    except Exception as e:
+        print(f"Desconexión del cliente WS: {e}")
 
 def start_fastapi_server():
     """Ejecuta el servidor web escuchando en la IP del Access Point"""
-    uvicorn.run(app_api, host="192.168.4.1", port=8000, log_level="error")
-
+    try:
+        uvicorn.run(app_api, host="192.168.4.1", port=8000, log_level="error")
+    except Exception as e:
+        print(f"Error crítico al iniciar uvicorn: {e}")
 
 class RedTeamApp(tk.Tk):
     def __init__(self):
@@ -4285,12 +4297,16 @@ if __name__ == "__main__":
         except Exception as e:
             self.escribir_consola(f"[!] Error al eliminar: {e}")
 
+
     def _activar_modo_remoto(self):
         """Disparador: Limpia la UI, levanta infraestructura segura y muestra QR."""
-        # 1. Apagar UI pesada para liberar recursos
         self.limpiar_main_frame()
         self.agregar_boton_atras(self.show_utils_menu)
         ttk.Label(self.main_frame, text="MODO REMOTO", style='Title.TLabel').pack(pady=2)
+
+        # 1. Envolver en ScrollableFrame para garantizar el comportamiento táctil y scroll
+        scroll = ScrollableFrame(self.main_frame, max_items=15)
+        scroll.pack(fill='both', expand=True, padx=2, pady=2)
 
         self.escribir_consola("[*] Preparando infraestructura de red temporal...")
         
@@ -4308,19 +4324,21 @@ if __name__ == "__main__":
                 
                 # Configurar e iniciar Hostapd (WPA2)
                 hostapd_conf = f"interface={iface}\ndriver=nl80211\nssid=DragonFly_UI\nhw_mode=g\nchannel=6\nmacaddr_acl=0\nauth_algs=1\nwpa=2\nwpa_passphrase=dragonfly\nwpa_key_mgmt=WPA-PSK\nrsn_pairwise=CCMP\n"
-                with open("/tmp/hostapd_remote.conf", "w") as f: f.write(hostapd_conf)
+                with open("/tmp/hostapd_remote.conf", "w") as f: 
+                    f.write(hostapd_conf)
                 subprocess.run(["sudo", "pkill", "hostapd"], stderr=subprocess.DEVNULL)
                 self.remote_hostapd = subprocess.Popen(["sudo", "hostapd", "/tmp/hostapd_remote.conf"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 
                 # Configurar e iniciar Dnsmasq (Portal Cautivo / DHCP)
                 dnsmasq_conf = f"interface={iface}\nexcept-interface=lo\nbind-interfaces\ndhcp-range=192.168.4.10,192.168.4.100,12h\ndhcp-option=3,192.168.4.1\ndhcp-option=6,192.168.4.1\n"
-                with open("/tmp/dnsmasq_remote.conf", "w") as f: f.write(dnsmasq_conf)
+                with open("/tmp/dnsmasq_remote.conf", "w") as f: 
+                    f.write(dnsmasq_conf)
                 subprocess.run(["sudo", "pkill", "dnsmasq"], stderr=subprocess.DEVNULL)
                 self.remote_dnsmasq = subprocess.Popen(["sudo", "dnsmasq", "-C", "/tmp/dnsmasq_remote.conf", "-d"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 
                 self.after(0, self.escribir_consola, "[+] Red 'DragonFly_UI' (Pass: dragonfly) activa.")
                 
-                # 3. Lanzar Backend FastAPI en hilo daemon secundario
+                # Lanzar Backend FastAPI en hilo daemon secundario
                 if not hasattr(self, 'fastapi_thread') or not self.fastapi_thread.is_alive():
                     self.fastapi_thread = threading.Thread(target=start_fastapi_server, daemon=True)
                     self.fastapi_thread.start()
@@ -4332,39 +4350,47 @@ if __name__ == "__main__":
         # Ejecutar levantamiento sin bloquear la interfaz gráfica
         threading.Thread(target=levantar_red_y_backend, daemon=True).start()
 
-        # 4. Generar el código QR
-        qr_frame = ttk.Frame(self.main_frame, style='Dark.TFrame')
-        qr_frame.pack(fill='both', expand=True, pady=5)
-        
-        qr_data = "WIFI:S:DragonFly_UI;T:WPA;P:dragonfly;;"
-        qr = qrcode.QRCode(version=1, box_size=4, border=1)
-        qr.add_data(qr_data)
-        qr.make(fit=True)
-        
-        img_qr = qr.make_image(fill_color="black", back_color="white").convert("RGB")
-        # Se escala a 130x130 para que se vea claro en tu pantalla LCD de 2.4"
-        img_qr = img_qr.resize((130, 130), Image.Resampling.NEAREST)
-        self.photo_qr = ImageTk.PhotoImage(img_qr)
-        
-        tk.Label(qr_frame, image=self.photo_qr, bg="#0c0c0c").pack(pady=2)
-        ttk.Label(qr_frame, text="Conectar a: DragonFly_UI\nNavegador: 192.168.4.1:8000", style='Gray.TLabel', justify='center').pack()
+        # 3. Generar el código QR de manera segura
+        try:
+            qr_data = "WIFI:S:DragonFly_UI;T:WPA;P:dragonfly;;"
+            qr = qrcode.QRCode(version=1, box_size=4, border=1)
+            qr.add_data(qr_data)
+            qr.make(fit=True)
+            
+            img_qr = qr.make_image(fill_color="black", back_color="white").convert("RGB")
+            img_qr = img_qr.resize((130, 130), Image.Resampling.NEAREST)
+            self.photo_qr = ImageTk.PhotoImage(img_qr)
+            
+            # 4. Inyectar en el ScrollableFrame
+            lbl_qr = tk.Label(scroll.scrollable_frame, image=self.photo_qr, bg="#0c0c0c")
+            lbl_qr.pack(pady=2)
+            
+            ttk.Label(scroll.scrollable_frame, text="Conectar a: DragonFly_UI\nNavegador: 192.168.4.1:8000", style='Gray.TLabel', justify='center').pack(pady=4)
+        except Exception as e:
+            self.escribir_consola(f"[!] Error procesando QR: {e}")
 
         # Botón para matar los procesos y regresar el WiFi a la normalidad
-        ttk.Button(qr_frame, text="DETENER SERVIDOR", style='Danger.TButton', command=self._detener_modo_remoto).pack(pady=5)
-        self.mostrar_consola(parent=qr_frame)
+        scroll.add_button(text="DETENER SERVIDOR", command=self._detener_modo_remoto, style='Danger.TButton', width=28)
+        
+        # 5. Inyectar la consola dentro del frame deslizable
+        self.mostrar_consola(parent=scroll.scrollable_frame)
 
     def _detener_modo_remoto(self):
         """Mata el AP seguro y restaura NetworkManager"""
         self.escribir_consola("[*] Apagando backend y restaurando red local...")
         def detener():
-            subprocess.run(["sudo", "pkill", "hostapd"], stderr=subprocess.DEVNULL)
-            subprocess.run(["sudo", "pkill", "dnsmasq"], stderr=subprocess.DEVNULL)
-            subprocess.run(["sudo", "nmcli", "device", "set", "wlan0", "managed", "yes"], stderr=subprocess.DEVNULL)
-            subprocess.run(["sudo", "systemctl", "restart", "NetworkManager"], stderr=subprocess.DEVNULL)
-            self.after(0, self.show_utils_menu)
+            try:
+                subprocess.run(["sudo", "pkill", "hostapd"], stderr=subprocess.DEVNULL)
+                subprocess.run(["sudo", "pkill", "dnsmasq"], stderr=subprocess.DEVNULL)
+                subprocess.run(["sudo", "nmcli", "device", "set", "wlan0", "managed", "yes"], stderr=subprocess.DEVNULL)
+                subprocess.run(["sudo", "systemctl", "restart", "NetworkManager"], stderr=subprocess.DEVNULL)
+            except Exception as e:
+                self.after(0, self.escribir_consola, f"[!] Error al restaurar de red: {e}")
+            finally:
+                self.after(0, self.show_utils_menu)
+                
         threading.Thread(target=detener, daemon=True).start()
-
-
+    
     # ==========================================
     # MENÚ UTILIDADES 
     # ==========================================
@@ -4389,7 +4415,7 @@ if __name__ == "__main__":
             ("Activar Perfil: MODO USB", lambda: trigger_usb("host")),
             ("Activar Perfil: RUBBER DUCKY", lambda: trigger_usb("gadget")),
             ("Activar Perfil: POISON (Red USB)", self._utils_poison_menu),
-            ("Activar Modo Remoto (App Web)", self._activar_modo_remoto),
+            ("Activar Modo Remoto (App Web)", self._activar_modo_remoto), # ← Integración de tu botón
             ("Conectar a Red WiFi", self._utils_wifi_seleccionar_interfaz),
             ("Redes WiFi Guardadas", self._utils_wifi_redes_guardadas),
             ("Estado de Red WiFi", self._utils_wifi_estado),
