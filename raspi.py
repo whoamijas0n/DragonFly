@@ -594,10 +594,9 @@ HTML_HELLO_WORLD = """
     <title>DragonFly Remote</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
-        body { background-color: #0c0c0c; color: #ff2222; font-family: Courier, monospace; text-align: center; padding-top: 15%; margin: 0; }
-        h1 { font-size: 2em; border-bottom: 2px solid #cc0a0a; display: inline-block; padding-bottom: 10px; }
+        body { background-color: #0c0c0c; color: #ff2222; font-family: Courier, monospace; text-align: center; padding-top: 15%; }
+        h1 { font-size: 2.5em; border-bottom: 2px solid #cc0a0a; display: inline-block; padding-bottom: 10px; }
         p { color: #e2e2e2; }
-        /* Se añadió min-height y pre-wrap para que la terminal se vea bien y respete los saltos de línea */
         .terminal { background: #000; padding: 15px; border: 1px solid #333; display: inline-block; margin-top: 20px; width: 90%; max-width: 500px; text-align: left; min-height: 150px; white-space: pre-wrap; word-wrap: break-word; }
     </style>
 </head>
@@ -606,7 +605,7 @@ HTML_HELLO_WORLD = """
     <p>Control Remoto Activo - Conexión Exitosa</p>
     <div class="terminal" id="ws-output">[*] Esperando conexión WebSocket...</div>
     <script>
-        // CORRECCIÓN: Se eliminaron los espacios en la URL que rompían el protocolo ws://
+        // CORRECCIÓN: Sin espacios en la URL
         var ws = new WebSocket("ws://" + location.host + "/ws");
         var terminal = document.getElementById("ws-output");
         
