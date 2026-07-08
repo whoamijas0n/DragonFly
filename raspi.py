@@ -589,37 +589,42 @@ app_api = FastAPI(title="DragonFly Remote")
 HTML_HELLO_WORLD = """
 <!DOCTYPE html>
 <html lang="es">
-    <head>
-        <meta charset="UTF-8">
-        <title>DragonFly Remote</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <style>
-            body { background-color: #0c0c0c; color: #ff2222; font-family: Courier, monospace; text-align: center; padding-top: 15%; }
-            h1 { font-size: 2.5em; border-bottom: 2px solid #cc0a0a; display: inline-block; padding-bottom: 10px; }
-            p { color: #e2e2e2; }
-            .terminal { background: #000; padding: 15px; border: 1px solid #333; display: inline-block; margin-top: 20px; width: 90%; max-width: 500px; text-align: left; }
-        </style>
-    </head>
-    <body>
-        <h1>HOLA MUNDO</h1>
-        <p>Control Remoto Activo - Conexión Exitosa</p>
-        <div class="terminal" id="ws-output">[*] Esperando conexión WebSocket...</div>
-        <script>
-            var ws = new WebSocket("ws://" + location.host + "/ws");
-            var terminal = document.getElementById("ws-output");
-            
-            ws.onopen = function(event) {
-                terminal.innerText += "\\n[+] WebSocket Conectado al backend.";
-                ws.send("Cliente Web Inicializado");
-            };
-            ws.onmessage = function(event) {
-                terminal.innerText += "\\n> " + event.data;
-            };
-            ws.onerror = function(event) {
-                terminal.innerText += "\\n[!] Error en la conexión WebSocket.";
-            };
-        </script>
-    </body>
+<head>
+    <meta charset="UTF-8">
+    <title>DragonFly Remote</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { background-color: #0c0c0c; color: #ff2222; font-family: Courier, monospace; text-align: center; padding-top: 15%; margin: 0; }
+        h1 { font-size: 2em; border-bottom: 2px solid #cc0a0a; display: inline-block; padding-bottom: 10px; }
+        p { color: #e2e2e2; }
+        /* Se añadió min-height y pre-wrap para que la terminal se vea bien y respete los saltos de línea */
+        .terminal { background: #000; padding: 15px; border: 1px solid #333; display: inline-block; margin-top: 20px; width: 90%; max-width: 500px; text-align: left; min-height: 150px; white-space: pre-wrap; word-wrap: break-word; }
+    </style>
+</head>
+<body>
+    <h1>HOLA MUNDO</h1>
+    <p>Control Remoto Activo - Conexión Exitosa</p>
+    <div class="terminal" id="ws-output">[*] Esperando conexión WebSocket...</div>
+    <script>
+        // CORRECCIÓN: Se eliminaron los espacios en la URL que rompían el protocolo ws://
+        var ws = new WebSocket("ws://" + location.host + "/ws");
+        var terminal = document.getElementById("ws-output");
+        
+        ws.onopen = function(event) {
+            terminal.innerText += "\\n[+] WebSocket Conectado al backend.";
+            ws.send("Cliente Web Inicializado");
+        };
+        ws.onmessage = function(event) {
+            terminal.innerText += "\\n> " + event.data;
+        };
+        ws.onerror = function(event) {
+            terminal.innerText += "\\n[!] Error en la conexión WebSocket.";
+        };
+        ws.onclose = function(event) {
+            terminal.innerText += "\\n[!] Conexión WebSocket cerrada.";
+        };
+    </script>
+</body>
 </html>
 """
 
@@ -4429,25 +4434,25 @@ if __name__ == "__main__":
         """Mata el AP seguro, limpia las reglas y restaura NetworkManager"""
         self.escribir_consola("[*] Apagando backend y restaurando red local...")
         def detener():
-            try:
-                # 1. Matar demonios forzosamente
-                subprocess.run(["sudo", "pkill", "-9", "-f", "hostapd"], stderr=subprocess.DEVNULL)
-                subprocess.run(["sudo", "pkill", "-9", "-f", "dnsmasq"], stderr=subprocess.DEVNULL)
-                # 2. Limpiar iptables rigurosamente (Evita que el tráfico se rompa después)
-                subprocess.run(["sudo", "iptables", "--flush"], stderr=subprocess.DEVNULL)
-                subprocess.run(["sudo", "iptables", "--table", "nat", "--flush"], stderr=subprocess.DEVNULL)
-                # 3. Devolver el control de la interfaz a NetworkManager y reiniciar redes
-                subprocess.run(["sudo", "ip", "link", "set", "wlan0", "down"], stderr=subprocess.DEVNULL)
-                subprocess.run(["sudo", "ip", "addr", "flush", "dev", "wlan0"], stderr=subprocess.DEVNULL)
-                subprocess.run(["sudo", "ip", "link", "set", "wlan0", "up"], stderr=subprocess.DEVNULL)
-                subprocess.run(["sudo", "nmcli", "device", "set", "wlan0", "managed", "yes"], stderr=subprocess.DEVNULL)
-                # Restaurar wpa_supplicant y NetworkManager para que vuelva a conectar a redes normales
-                subprocess.run(["sudo", "systemctl", "restart", "wpa_supplicant"], stderr=subprocess.DEVNULL)
-                subprocess.run(["sudo", "systemctl", "restart", "NetworkManager"], stderr=subprocess.DEVNULL)
-            except Exception as e:
-                self.after(0, self.escribir_consola, f"[!] Error al restaurar de red: {e}")
-            finally:
-                self.after(0, self.show_utils_menu)
+         try:
+             # 1. Matar demonios forzosamente
+             subprocess.run(["sudo", "pkill", "-9", "-f", "hostapd"], stderr=subprocess.DEVNULL)
+             subprocess.run(["sudo", "pkill", "-9", "-f", "dnsmasq"], stderr=subprocess.DEVNULL)
+             # 2. Limpiar iptables rigurosamente (Evita que el tráfico se rompa después)
+             subprocess.run(["sudo", "iptables", "--flush"], stderr=subprocess.DEVNULL)
+             subprocess.run(["sudo", "iptables", "--table", "nat", "--flush"], stderr=subprocess.DEVNULL)
+             # 3. Devolver el control de la interfaz a NetworkManager y reiniciar redes
+             subprocess.run(["sudo", "ip", "link", "set", "wlan0", "down"], stderr=subprocess.DEVNULL)
+             subprocess.run(["sudo", "ip", "addr", "flush", "dev", "wlan0"], stderr=subprocess.DEVNULL)
+             subprocess.run(["sudo", "ip", "link", "set", "wlan0", "up"], stderr=subprocess.DEVNULL)
+             subprocess.run(["sudo", "nmcli", "device", "set", "wlan0", "managed", "yes"], stderr=subprocess.DEVNULL)
+             # Restaurar wpa_supplicant y NetworkManager para que vuelva a conectar a redes normales
+             subprocess.run(["sudo", "systemctl", "restart", "wpa_supplicant"], stderr=subprocess.DEVNULL)
+             subprocess.run(["sudo", "systemctl", "restart", "NetworkManager"], stderr=subprocess.DEVNULL)
+         except Exception as e:
+             self.after(0, self.escribir_consola, f"[!] Error al restaurar de red: {e}")
+         finally:
+             self.after(0, self.show_utils_menu)
                 
         threading.Thread(target=detener, daemon=True).start()
 
