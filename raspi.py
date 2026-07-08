@@ -15,10 +15,113 @@ import gc
 import random 
 # --- MODO REMOTO ---
 import qrcode
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, WebSocket, Request
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 import uvicorn
 import asyncio
+import os
+
+# ─── CONFIGURACIÓN FASTAPI + JINJA2 ─────────────────────────────
+app_api = FastAPI(title="DragonFly Remote")
+
+# Rutas absolutas para templates y estáticos (relativas al script)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
+STATIC_DIR = os.path.join(BASE_DIR, "static")
+
+# Crear directorios si no existen
+os.makedirs(TEMPLATES_DIR, exist_ok=True)
+os.makedirs(os.path.join(STATIC_DIR, "css"), exist_ok=True)
+os.makedirs(os.path.join(STATIC_DIR, "js"), exist_ok=True)
+
+# Montar archivos estáticos (CSS, JS, imágenes)
+app_api.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+# Configurar Jinja2 templates
+templates = Jinja2Templates(directory=TEMPLATES_DIR)
+
+# ─── RUTAS WEB ───────────────────────────────────────────────────
+@app_api.get("/", response_class=HTMLResponse)
+async def read_root(request: Request):
+    """Menú principal - Renderiza index.html con Jinja2"""
+    return templates.TemplateResponse(
+        "index.html",
+        {
+            "request": request,
+            "title": "DragonFly - Red Team Toolbox",
+            "page_id": "home"
+        }
+    )
+
+@app_api.get("/recon", response_class=HTMLResponse)
+async def recon_view(request: Request):
+    """Vista de Reconocimiento (Nmap)"""
+    return templates.TemplateResponse(
+        "recon.html",
+        {"request": request, "title": "Reconocimiento", "page_id": "recon"}
+    )
+
+@app_api.get("/wifi", response_class=HTMLResponse)
+async def wifi_view(request: Request):
+    """Vista de Auditoría WiFi"""
+    return templates.TemplateResponse(
+        "wifi.html",
+        {"request": request, "title": "Auditoría WiFi", "page_id": "wifi"}
+    )
+
+@app_api.get("/mac", response_class=HTMLResponse)
+async def mac_view(request: Request):
+    """Vista de MAC Changer"""
+    return templates.TemplateResponse(
+        "mac.html",
+        {"request": request, "title": "MAC Changer", "page_id": "mac"}
+    )
+
+@app_api.get("/ducky", response_class=HTMLResponse)
+async def ducky_view(request: Request):
+    """Vista de Rubber Ducky"""
+    return templates.TemplateResponse(
+        "ducky.html",
+        {"request": request, "title": "Rubber Ducky", "page_id": "ducky"}
+    )
+
+@app_api.get("/poison", response_class=HTMLResponse)
+async def poison_view(request: Request):
+    """Vista de PoisonTap"""
+    return templates.TemplateResponse(
+        "poison.html",
+        {"request": request, "title": "PoisonTap", "page_id": "poison"}
+    )
+
+@app_api.get("/utils", response_class=HTMLResponse)
+async def utils_view(request: Request):
+    """Vista de Utilidades OS"""
+    return templates.TemplateResponse(
+        "utils.html",
+        {"request": request, "title": "Utilidades", "page_id": "utils"}
+    )
+
+# ─── WEBSOCKET (Sin cambios) ─────────────────────────────────────
+@app_api.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    await websocket.send_text("[+] WebSocket Conectado: Sistema DragonFly listo.")
+    try:
+        while True:
+            data = await websocket.receive_text()
+            await websocket.send_text(f"Recibido en Pi: {data}")
+    except Exception as e:
+        print(f"Desconexión del cliente WS: {e}")
+
+# ─── SERVIDOR UVICORN ────────────────────────────────────────────
+def start_fastapi_server():
+    """Ejecuta el servidor web escuchando en todas las interfaces"""
+    try:
+        uvicorn.run(app_api, host="0.0.0.0", port=8000, log_level="error")
+    except Exception as e:
+        print(f"Error crítico al iniciar uvicorn: {e}")
 
 # Esto asegura que sin importar desde dónde se llame el script (ej. autostart),
 # las rutas relativas (payloads, Resultados_*, etc.) apunten a la carpeta DragonFly.
@@ -580,74 +683,6 @@ def crear_statusbar(root_app):
                          font=FONT_MICRO, anchor='e')
     lbl_iface.pack(side='right', padx=2)
     return bar, lbl_ip, lbl_iface
-
-# ==========================================
-# BACKEND FASTAPI (MODO REMOTO)
-# ==========================================
-app_api = FastAPI(title="DragonFly Remote")
-
-HTML_HELLO_WORLD = """
-<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <title>DragonFly Remote</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <style>
-        body { background-color: #0c0c0c; color: #ff2222; font-family: Courier, monospace; text-align: center; padding-top: 15%; }
-        h1 { font-size: 2.5em; border-bottom: 2px solid #cc0a0a; display: inline-block; padding-bottom: 10px; }
-        p { color: #e2e2e2; }
-        .terminal { background: #000; padding: 15px; border: 1px solid #333; display: inline-block; margin-top: 20px; width: 90%; max-width: 500px; text-align: left; min-height: 150px; white-space: pre-wrap; word-wrap: break-word; }
-    </style>
-</head>
-<body>
-    <h1>HOLA MUNDO</h1>
-    <p>Control Remoto Activo - Conexión Exitosa</p>
-    <div class="terminal" id="ws-output">[*] Esperando conexión WebSocket...</div>
-    <script>
-        // CORRECCIÓN: Sin espacios en la URL
-        var ws = new WebSocket("ws://" + location.host + "/ws");
-        var terminal = document.getElementById("ws-output");
-        
-        ws.onopen = function(event) {
-            terminal.innerText += "\\n[+] WebSocket Conectado al backend.";
-            ws.send("Cliente Web Inicializado");
-        };
-        ws.onmessage = function(event) {
-            terminal.innerText += "\\n> " + event.data;
-        };
-        ws.onerror = function(event) {
-            terminal.innerText += "\\n[!] Error en la conexión WebSocket.";
-        };
-        ws.onclose = function(event) {
-            terminal.innerText += "\\n[!] Conexión WebSocket cerrada.";
-        };
-    </script>
-</body>
-</html>
-"""
-
-@app_api.get("/")
-def read_root():
-    return HTMLResponse(content=HTML_HELLO_WORLD)
-
-@app_api.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    await websocket.send_text("[+] WebSocket Conectado: Sistema DragonFly listo.")
-    try:
-        while True:
-            data = await websocket.receive_text()
-            await websocket.send_text(f"Recibido en Pi: {data}")
-    except Exception as e:
-        print(f"Desconexión del cliente WS: {e}")
-
-def start_fastapi_server():
-    """Ejecuta el servidor web escuchando en todas las interfaces (para evitar fallos de bind)"""
-    try:
-        uvicorn.run(app_api, host="0.0.0.0", port=8000, log_level="error")
-    except Exception as e:
-        print(f"Error crítico al iniciar uvicorn: {e}")
 
 class RedTeamApp(tk.Tk):
     def __init__(self):

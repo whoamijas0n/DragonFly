@@ -2,33 +2,62 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>{% block title %}DragonFly Remote{% endblock %}</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#0c0c0c">
+    <title>{% block title %}{{ title | default('DragonFly') }}{% endblock %}</title>
+    
+    <!-- Favicon -->
+    <link rel="icon" type="image/png" href="/static/img/favicon.png">
+    
+    <!-- CSS Global -->
     <link rel="stylesheet" href="/static/css/style.css">
+    
+    {% block extra_css %}{% endblock %}
 </head>
-<body>
-    <header class="topbar">
-        <h1>DragonFly<span>_</span></h1>
-        <p class="subtitle">Control Remoto Activo</p>
+<body class="cyberdeck" data-page="{{ page_id | default('home') }}">
+    
+    <!-- ═══ HEADER ═══ -->
+    <header class="header-bar">
+        <div class="header-brand">
+            <span class="brand-icon">▓▓</span>
+            <span class="brand-text">DRAGONFLY</span>
+        </div>
+        <nav class="header-nav">
+            <a href="/" class="nav-link {% if page_id == 'home' %}active{% endif %}">Inicio</a>
+            <a href="/recon" class="nav-link {% if page_id == 'recon' %}active{% endif %}">Recon</a>
+            <a href="/wifi" class="nav-link {% if page_id == 'wifi' %}active{% endif %}">WiFi</a>
+            <a href="/mac" class="nav-link {% if page_id == 'mac' %}active{% endif %}">MAC</a>
+            <a href="/ducky" class="nav-link {% if page_id == 'ducky' %}active{% endif %}">Ducky</a>
+            <a href="/poison" class="nav-link {% if page_id == 'poison' %}active{% endif %}">Poison</a>
+            <a href="/utils" class="nav-link {% if page_id == 'utils' %}active{% endif %}">Utils</a>
+        </nav>
     </header>
 
-    <nav class="navmenu">
-        <a href="/" class="navlink {% if active == 'inicio' %}active{% endif %}">Inicio</a>
-        <a href="/recon" class="navlink {% if active == 'recon' %}active{% endif %}">Recon</a>
-        <a href="/wifi" class="navlink {% if active == 'wifi' %}active{% endif %}">WiFi</a>
-        <a href="/mac" class="navlink {% if active == 'mac' %}active{% endif %}">MAC</a>
-        <a href="/ducky" class="navlink {% if active == 'ducky' %}active{% endif %}">Ducky</a>
-        <a href="/poison" class="navlink {% if active == 'poison' %}active{% endif %}">Poison</a>
-        <a href="/utilidades" class="navlink {% if active == 'utilidades' %}active{% endif %}">Utilidades</a>
-    </nav>
-
-    <main class="content">
+    <!-- ═══ MAIN CONTENT ═══ -->
+    <main class="main-content">
         {% block content %}{% endblock %}
     </main>
 
-    <div class="terminal" id="ws-output">[*] Esperando conexión WebSocket...</div>
+    <!-- ═══ TERMINAL WEBSOCKET ═══ -->
+    <section class="terminal-section">
+        <div class="terminal-header">
+            <span class="terminal-dot red"></span>
+            <span class="terminal-dot yellow"></span>
+            <span class="terminal-dot green"></span>
+            <span class="terminal-title">root@dragonfly:~#</span>
+        </div>
+        <div id="ws-output" class="terminal-output">[*] Esperando conexión WebSocket...</div>
+    </section>
 
+    <!-- ═══ STATUS BAR ═══ -->
+    <footer class="status-bar">
+        <span class="status-item" id="status-net">[NET] ---.---.---</span>
+        <span class="status-item status-right" id="status-conn">--- ●</span>
+    </footer>
+
+    <!-- JS Terminal WebSocket -->
     <script src="/static/js/terminal.js"></script>
-    {% block scripts %}{% endblock %}
+    
+    {% block extra_js %}{% endblock %}
 </body>
 </html>
