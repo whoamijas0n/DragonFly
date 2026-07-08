@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+
+{% block title %}DragonFly Remote - Menú Principal{% endblock %}
+
+{% block content %}
+<div class="menu-grid">
+    <a href="/recon" class="menu-item">
+        <span class="menu-icon">◎</span>
+        <span class="menu-label">Recon</span>
+    </a>
+    <a href="/mac" class="menu-item">
+        <span class="menu-icon">▣</span>
+        <span class="menu-label">MAC Changer</span>
+    </a>
+    <a href="/wifi" class="menu-item">
+        <span class="menu-icon">▲</span>
+        <span class="menu-label">WiFi</span>
+    </a>
+    <a href="/nrf24" class="menu-item">
+        <span class="menu-icon">◈</span>
+        <span class="menu-label">NRF24</span>
+    </a>
+    <a href="/sub1ghz" class="menu-item">
+        <span class="menu-icon">≈</span>
+        <span class="menu-label">Sub-1GHz</span>
+    </a>
+    <a href="/ducky" class="menu-item">
+        <span class="menu-icon">⌨</span>
+        <span class="menu-label">Rubber Ducky</span>
+    </a>
+    <a href="/poison" class="menu-item">
+        <span class="menu-icon">☠</span>
+        <span class="menu-label">PoisonTap</span>
+    </a>
+    <a href="/utilidades" class="menu-item">
+        <span class="menu-icon">⚙</span>
+        <span class="menu-label">Utilidades</span>
+    </a>
+    <a href="/autodestruccion" class="menu-item menu-item-danger">
+        <span class="menu-icon">☢</span>
+        <span class="menu-label">Autodestrucción</span>
+    </a>
+</div>
+{% endblock %}

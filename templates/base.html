@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>{% block title %}DragonFly Remote{% endblock %}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <header class="topbar">
+        <h1>DragonFly<span>_</span></h1>
+        <p class="subtitle">Control Remoto Activo</p>
+    </header>
+
+    <nav class="navmenu">
+        <a href="/" class="navlink {% if active == 'inicio' %}active{% endif %}">Inicio</a>
+        <a href="/recon" class="navlink {% if active == 'recon' %}active{% endif %}">Recon</a>
+        <a href="/wifi" class="navlink {% if active == 'wifi' %}active{% endif %}">WiFi</a>
+        <a href="/mac" class="navlink {% if active == 'mac' %}active{% endif %}">MAC</a>
+        <a href="/ducky" class="navlink {% if active == 'ducky' %}active{% endif %}">Ducky</a>
+        <a href="/poison" class="navlink {% if active == 'poison' %}active{% endif %}">Poison</a>
+        <a href="/utilidades" class="navlink {% if active == 'utilidades' %}active{% endif %}">Utilidades</a>
+    </nav>
+
+    <main class="content">
+        {% block content %}{% endblock %}
+    </main>
+
+    <div class="terminal" id="ws-output">[*] Esperando conexión WebSocket...</div>
+
+    <script src="/static/js/terminal.js"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>
