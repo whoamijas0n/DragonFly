@@ -4297,6 +4297,7 @@ if __name__ == "__main__":
         except Exception as e:
             self.escribir_consola(f"[!] Error al eliminar: {e}")
 
+    
 
     def _activar_modo_remoto(self):
         """Disparador: Limpia la UI, levanta infraestructura segura y muestra QR."""
@@ -4312,59 +4313,91 @@ if __name__ == "__main__":
         def levantar_red_y_backend():
             try:
                 iface = "wlan0"
+                # 0. LIMPIEZA FORZADA (matar procesos previos y evitar interferencias)
+                subprocess.run(["sudo", "pkill", "-9", "-f", "hostapd"], stderr=subprocess.DEVNULL)
+                subprocess.run(["sudo", "pkill", "-9", "-f", "dnsmasq"], stderr=subprocess.DEVNULL)
+                subprocess.run(["sudo", "rfkill", "unblock", "wlan"], stderr=subprocess.DEVNULL)
+                # MATAR WPA_SUPPLICANT: Vital para que no pelee por el control de wlan0 con hostapd
+                subprocess.run(["sudo", "killall", "wpa_supplicant"], stderr=subprocess.DEVNULL)
+                time.sleep(1)
                 
-                # 1. Habilitar reenvío de IP (buena práctica para NAT)
+                # 1. Habilitar reenvío de IP
                 subprocess.run(["sudo", "sysctl", "-w", "net.ipv4.ip_forward=1"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-                # 2. Configurar e iniciar Hostapd primero
-                hostapd_conf = f"interface={iface}\ndriver=nl80211\nssid=DragonFly_UI\nhw_mode=g\nchannel=6\nmacaddr_acl=0\nauth_algs=1\nwpa=2\nwpa_passphrase=dragonfly\nwpa_key_mgmt=WPA-PSK\nrsn_pairwise=CCMP\n"
-                with open("/tmp/hostapd_remote.conf", "w") as f: 
-                    f.write(hostapd_conf)
-                subprocess.run(["sudo", "pkill", "hostapd"], stderr=subprocess.DEVNULL)
-                self.remote_hostapd = subprocess.Popen(["sudo", "hostapd", "/tmp/hostapd_remote.conf"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 
-                time.sleep(3) # Pausa crucial copiada de la lógica del Evil Twin
-
-                # 3. Desvincular de NetworkManager y establecer IP
+                # 2. DESVINCULAR de NetworkManager
                 subprocess.run(["sudo", "nmcli", "device", "set", iface, "managed", "no"], stderr=subprocess.DEVNULL)
+                time.sleep(1)
+                
+                # 3. CONFIGURAR IP ESTÁTICA (ANTES de hostapd para que no crashee al reiniciar la interfaz)
                 subprocess.run(["sudo", "ip", "link", "set", iface, "down"], stderr=subprocess.DEVNULL)
                 subprocess.run(["sudo", "ip", "addr", "flush", "dev", iface], stderr=subprocess.DEVNULL)
-                subprocess.run(["sudo", "ip", "link", "set", iface, "up"], stderr=subprocess.DEVNULL)
                 subprocess.run(["sudo", "ip", "addr", "add", "192.168.4.1/24", "dev", iface], stderr=subprocess.DEVNULL)
+                subprocess.run(["sudo", "ip", "link", "set", iface, "up"], stderr=subprocess.DEVNULL)
+                time.sleep(2)  # Dar tiempo al kernel para asentar la IP
                 
-                time.sleep(1.5) # Pausa para que el kernel asiente la IP
+                # 4. Iniciar hostapd (el AP)
+                hostapd_conf = (
+                    f"interface={iface}\n"
+                    f"driver=nl80211\n"
+                    f"ssid=DragonFly_UI\n"
+                    f"hw_mode=g\n"
+                    f"channel=6\n"
+                    f"country_code=US\n"  # <-- Previene bloqueos por dominio regulatorio
+                    f"macaddr_acl=0\n"
+                    f"auth_algs=1\n"
+                    f"wpa=2\n"
+                    f"wpa_passphrase=dragonfly\n"
+                    f"wpa_key_mgmt=WPA-PSK\n"
+                    f"rsn_pairwise=CCMP\n"
+                )
+                with open("/tmp/hostapd_remote.conf", "w") as f: 
+                    f.write(hostapd_conf)
+                self.remote_hostapd = subprocess.Popen(
+                    ["sudo", "hostapd", "/tmp/hostapd_remote.conf"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
+                time.sleep(3)  # Esperar a que el AP se estabilice
                 
-                # 4. Configurar Dnsmasq (Agregado 'address=/#/192.168.4.1' para forzar portal cautivo)
-                dnsmasq_conf = f"interface={iface}\nexcept-interface=lo\nbind-interfaces\ndhcp-range=192.168.4.10,192.168.4.100,12h\ndhcp-option=3,192.168.4.1\ndhcp-option=6,192.168.4.1\naddress=/#/192.168.4.1\nno-hosts\nno-resolv\n"
+                # 5. MATAR dnsmasq residual y lanzar el nuevo
+                subprocess.run(["sudo", "pkill", "dnsmasq"], stderr=subprocess.DEVNULL)
+                dnsmasq_conf = (
+                    f"interface={iface}\n"
+                    f"except-interface=lo\n"
+                    f"bind-interfaces\n"
+                    f"dhcp-range=192.168.4.10,192.168.4.100,12h\n"
+                    f"dhcp-option=3,192.168.4.1\n"
+                    f"dhcp-option=6,192.168.4.1\n"
+                    f"address=/#/192.168.4.1\n"
+                    f"no-hosts\n"
+                    f"no-resolv\n"
+                )
                 with open("/tmp/dnsmasq_remote.conf", "w") as f: 
                     f.write(dnsmasq_conf)
-                subprocess.run(["sudo", "pkill", "dnsmasq"], stderr=subprocess.DEVNULL)
-                self.remote_dnsmasq = subprocess.Popen(["sudo", "dnsmasq", "-C", "/tmp/dnsmasq_remote.conf", "-d"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                self.remote_dnsmasq = subprocess.Popen(
+                    ["sudo", "dnsmasq", "-C", "/tmp/dnsmasq_remote.conf", "-d"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
+                time.sleep(1)
                 
-                time.sleep(2)
-
-                # 5. Configurar iptables (Permitir tráfico y redirigir HTTP 80 -> 8000)
+                # 6. Configurar iptables (redirección HTTP + permitir TODO desde clientes WiFi)
                 subprocess.run(["sudo", "iptables", "--flush"], stderr=subprocess.DEVNULL)
                 subprocess.run(["sudo", "iptables", "--table", "nat", "--flush"], stderr=subprocess.DEVNULL)
                 subprocess.run(["sudo", "iptables", "-P", "FORWARD", "ACCEPT"], stderr=subprocess.DEVNULL)
+                subprocess.run(
+                    ["sudo", "iptables", "-t", "nat", "-A", "PREROUTING",
+                    "-p", "tcp", "--dport", "80", "-j", "DNAT",
+                    "--to-destination", "192.168.4.1:8000"], stderr=subprocess.DEVNULL
+                )
+                # REGLA MAESTRA: Permitir TODO el tráfico entrante desde la interfaz del AP (DHCP, DNS, Web)
+                subprocess.run(["sudo", "iptables", "-A", "INPUT", "-i", iface, "-j", "ACCEPT"], stderr=subprocess.DEVNULL)
                 
-                # Redirección NAT para que el portal cautivo del teléfono abra FastAPI
-                subprocess.run(["sudo", "iptables", "-t", "nat", "-A", "PREROUTING", "-p", "tcp", "--dport", "80", "-j", "DNAT", "--to-destination", "192.168.4.1:8000"], stderr=subprocess.DEVNULL)
-                
-                # Abrir puertos DNS (53), DHCP (67), HTTP (80) y FastAPI (8000)
-                for port in ["80", "8000", "53"]:
-                    subprocess.run(["sudo", "iptables", "-A", "INPUT", "-i", iface, "-p", "tcp", "--dport", port, "-j", "ACCEPT"], stderr=subprocess.DEVNULL)
-                for port in ["53", "67"]:
-                    subprocess.run(["sudo", "iptables", "-A", "INPUT", "-i", iface, "-p", "udp", "--dport", port, "-j", "ACCEPT"], stderr=subprocess.DEVNULL)
-
                 self.after(0, self.escribir_consola, "[+] Red 'DragonFly_UI' (Pass: dragonfly) activa.")
                 
-                # 6. Lanzar Backend FastAPI
+                # 7. Lanzar Backend FastAPI
                 if not hasattr(self, 'fastapi_thread') or not self.fastapi_thread.is_alive():
                     self.fastapi_thread = threading.Thread(target=start_fastapi_server, daemon=True)
                     self.fastapi_thread.start()
                     self.after(0, self.escribir_consola, "[+] Backend asíncrono listo.")
-                    
             except Exception as e:
                 self.after(0, self.escribir_consola, f"[!] Error crítico en red: {e}")
 
@@ -4391,25 +4424,25 @@ if __name__ == "__main__":
         scroll.add_button(text="DETENER SERVIDOR", command=self._detener_modo_remoto, style='Danger.TButton', width=28)
         
         self.mostrar_consola(parent=scroll.scrollable_frame)
-
+    
     def _detener_modo_remoto(self):
         """Mata el AP seguro, limpia las reglas y restaura NetworkManager"""
         self.escribir_consola("[*] Apagando backend y restaurando red local...")
         def detener():
             try:
-                # 1. Matar demonios
-                subprocess.run(["sudo", "pkill", "hostapd"], stderr=subprocess.DEVNULL)
-                subprocess.run(["sudo", "pkill", "dnsmasq"], stderr=subprocess.DEVNULL)
-                
-                # 2. Limpiar iptables rigurosamente
+                # 1. Matar demonios forzosamente
+                subprocess.run(["sudo", "pkill", "-9", "-f", "hostapd"], stderr=subprocess.DEVNULL)
+                subprocess.run(["sudo", "pkill", "-9", "-f", "dnsmasq"], stderr=subprocess.DEVNULL)
+                # 2. Limpiar iptables rigurosamente (Evita que el tráfico se rompa después)
                 subprocess.run(["sudo", "iptables", "--flush"], stderr=subprocess.DEVNULL)
                 subprocess.run(["sudo", "iptables", "--table", "nat", "--flush"], stderr=subprocess.DEVNULL)
-                
-                # 3. Devolver el control de la interfaz y reiniciar redes
+                # 3. Devolver el control de la interfaz a NetworkManager y reiniciar redes
                 subprocess.run(["sudo", "ip", "link", "set", "wlan0", "down"], stderr=subprocess.DEVNULL)
                 subprocess.run(["sudo", "ip", "addr", "flush", "dev", "wlan0"], stderr=subprocess.DEVNULL)
                 subprocess.run(["sudo", "ip", "link", "set", "wlan0", "up"], stderr=subprocess.DEVNULL)
                 subprocess.run(["sudo", "nmcli", "device", "set", "wlan0", "managed", "yes"], stderr=subprocess.DEVNULL)
+                # Restaurar wpa_supplicant y NetworkManager para que vuelva a conectar a redes normales
+                subprocess.run(["sudo", "systemctl", "restart", "wpa_supplicant"], stderr=subprocess.DEVNULL)
                 subprocess.run(["sudo", "systemctl", "restart", "NetworkManager"], stderr=subprocess.DEVNULL)
             except Exception as e:
                 self.after(0, self.escribir_consola, f"[!] Error al restaurar de red: {e}")
