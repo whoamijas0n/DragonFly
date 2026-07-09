@@ -4253,7 +4253,6 @@ if __name__ == "__main__":
             ("Activar Perfil: MODO USB", lambda: trigger_usb("host")),
             ("Activar Perfil: RUBBER DUCKY", lambda: trigger_usb("gadget")),
             ("Activar Perfil: POISON (Red USB)", self._utils_poison_menu),
-            ("Activar Modo Remoto (App Web)", self._activar_modo_remoto), # ← Integración de tu botón
             ("Conectar a Red WiFi", self._utils_wifi_seleccionar_interfaz),
             ("Redes WiFi Guardadas", self._utils_wifi_redes_guardadas),
             ("Estado de Red WiFi", self._utils_wifi_estado),
