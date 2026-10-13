@@ -120,9 +120,9 @@ install_dragonfly() {
     python3 -m venv venv
     source venv/bin/activate
 
-    print_center "[*] Instalando dependencias de Python (CustomTkinter)..." "${DARK_RED}"
+    print_center "[*] Instalando dependencias de Python (CustomTkinter, PySerial)..." "${DARK_RED}"
     pip install --upgrade pip
-    pip install customtkinter
+    pip install customtkinter pyserial
 
     print_center "[*] Creando ejecutable global..." "${DARK_RED}"
     cat << 'EOF' > "$BIN_PATH"

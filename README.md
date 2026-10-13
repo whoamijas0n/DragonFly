@@ -652,7 +652,7 @@ cd /opt/dragonfly_desktop
 python3 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip
-pip install customtkinter
+pip install customtkinter pyserial
 ```
 
 El uso de un `venv` dedicado ofrece tres ventajas críticas en el contexto de un escritorio de auditoría:
