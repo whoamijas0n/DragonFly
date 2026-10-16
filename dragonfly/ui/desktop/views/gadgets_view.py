@@ -28,7 +28,7 @@ class GadgetsView(BaseView):
         self.btn_jam_stop = None
 
     def render(self):
-        """Muestra el panel de control del NRF24 Jammer."""
+        """Muestra el panel de control del NRF24 Jammer con detección asíncrona."""
         self.clear_frame()
         self.add_back_button(self.app.views['inicio'].render)
 
@@ -41,6 +41,9 @@ class GadgetsView(BaseView):
 
         def async_check():
             conectado = self.services.jammer.is_connected()
+            if not conectado:
+                g = self.services.jammer.get_gadget(force_reconnect=True)
+                conectado = g.is_available() if g else False
             puerto = self.services.jammer.get_port()
             self.run_on_ui(lambda: self._build_interface(conectado, puerto))
 
@@ -53,7 +56,7 @@ class GadgetsView(BaseView):
         ctk.CTkLabel(self.main_frame, text="NRF24 JAMMER (ESP32 BLUE-FLY)",
                      font=ctk.CTkFont(size=20, weight="bold")).pack(pady=10)
 
-        estado_txt = f"Conectado ({puerto})" if conectado else "Desconectado"
+        estado_txt = f"Conectado ({puerto})" if (conectado and puerto) else ("Conectado" if conectado else "Desconectado")
         estado_color = COLOR_ESTADO_ACTIVO if conectado else COLOR_ESTADO_INACTIVO
 
         ctk.CTkLabel(
@@ -86,11 +89,20 @@ class GadgetsView(BaseView):
 
             ctk.CTkButton(
                 self.main_frame,
+                text="Consultar Estado",
+                fg_color=COLOR_BOTON_GRIS,
+                hover_color=COLOR_BOTON_GRIS_HOVER,
+                height=40,
+                command=self._on_status
+            ).pack(fill="x", padx=40, pady=5)
+
+            ctk.CTkButton(
+                self.main_frame,
                 text="Reconectar / Sincronizar",
                 fg_color=COLOR_BOTON_GRIS,
                 hover_color=COLOR_BOTON_GRIS_HOVER,
                 height=40,
-                command=self.render
+                command=self._async_reconnect
             ).pack(fill="x", padx=40, pady=5)
         else:
             ctk.CTkLabel(
@@ -105,13 +117,41 @@ class GadgetsView(BaseView):
                 fg_color=COLOR_BOTON_ROJO,
                 hover_color=COLOR_BOTON_HOVER,
                 height=40,
-                command=self.render
+                command=self._async_reconnect
             ).pack(fill="x", padx=40, pady=10)
 
         self.show_console()
 
+    def _async_reconnect(self):
+        self.write_console("[*] Buscando dispositivo...")
+
+        def do_reconnect():
+            g = self.services.jammer.get_gadget(force_reconnect=True)
+            conectado = g.is_available() if g else False
+            puerto = self.services.jammer.get_port()
+            if not conectado:
+                self.run_on_ui(lambda: self.write_console("[!] No se detectó el hardware."))
+            else:
+                p_text = f" en {puerto}" if puerto else ""
+                self.run_on_ui(lambda: self.write_console(f"[+] Gadget NRF24 conectado{p_text}."))
+            self.run_on_ui(lambda: self._build_interface(conectado, puerto))
+
+        threading.Thread(target=do_reconnect, daemon=True).start()
+
     def _on_start_jam(self):
-        self.services.jammer.start_sweep_jam(on_output=self.write_console)
+        threading.Thread(
+            target=lambda: self.services.jammer.start_sweep_jam(on_output=self.write_console),
+            daemon=True
+        ).start()
 
     def _on_stop_jam(self):
-        self.services.jammer.stop_sweep_jam(on_output=self.write_console)
+        threading.Thread(
+            target=lambda: self.services.jammer.stop_sweep_jam(on_output=self.write_console),
+            daemon=True
+        ).start()
+
+    def _on_status(self):
+        threading.Thread(
+            target=lambda: self.services.jammer.get_status(on_output=self.write_console),
+            daemon=True
+        ).start()

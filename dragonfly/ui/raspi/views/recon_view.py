@@ -22,6 +22,8 @@ class ReconView(BaseView):
         self.rango_cidr_var = tk.StringVar(value="/24")
         self.scan_buttons = []
         self.btn_detener = None
+        # Bandera atómica anti-doble-tap: impide escaneos Nmap simultáneos
+        self.is_scanning = False
 
     def render(self):
         """Dibuja el menú de Nmap."""
@@ -66,13 +68,15 @@ class ReconView(BaseView):
             )
             self.scan_buttons.append(btn)
 
-        # Botón Detener
+        # Botón Detener (inicia bloqueado hasta que haya un escaneo en curso)
         self.btn_detener = scroll.add_button(
             text="DETENER ESCANEO",
             command=self._on_stop_scan,
-            style='Danger.TButton',
+            style='Gray.TButton',
             width=28
         )
+        if self.btn_detener:
+            self.btn_detener.state(['disabled'])
 
         # Botón Explorar
         scroll.add_button(
@@ -84,13 +88,45 @@ class ReconView(BaseView):
 
         self.show_console(parent=scroll.scrollable_frame)
 
+        # Si se vuelve a entrar a la vista con un escaneo activo, reflejar el bloqueo
+        if self.is_scanning:
+            self._apply_scanning_state(True)
+
         if self.target_ip_var.get() == "127.0.0.1":
             ip_auto = self.services.recon.get_auto_ip()
             if ip_auto != "127.0.0.1":
                 self.target_ip_var.set(ip_auto)
                 self.write_console(f"[*] IP detectada: {ip_auto}")
 
+    def _apply_scanning_state(self, scanning: bool):
+        """
+        Bloquea o restaura los botones de escaneo y el botón Detener.
+        Usa btn.state([...]) (no configure(state=...)) para bloquear de forma
+        consistente los eventos táctiles en los estilos ttk planos.
+        """
+        for btn in self.scan_buttons:
+            if btn and btn.winfo_exists():
+                if scanning:
+                    btn.config(style='Gray.TButton')
+                    btn.state(['disabled'])
+                else:
+                    btn.config(style='Red.TButton')
+                    btn.state(['!disabled'])
+        if self.btn_detener and self.btn_detener.winfo_exists():
+            if scanning:
+                self.btn_detener.config(style='Danger.TButton')
+                self.btn_detener.state(['!disabled'])
+            else:
+                self.btn_detener.config(style='Gray.TButton')
+                self.btn_detener.state(['disabled'])
+
     def _on_execute_scan(self, profile_index: int):
+        # Guarda contra eventos táctiles en cola: sin ella se lanzan múltiples
+        # instancias de Nmap simultáneas que saturan la RAM (512MB) de la Zero 2 WH.
+        if self.is_scanning:
+            self.write_console("[!] Ya hay un escaneo en curso.")
+            return
+
         target = self.services.recon.format_target(
             self.target_ip_var.get(),
             self.usar_rango_var.get(),
@@ -100,15 +136,13 @@ class ReconView(BaseView):
             self.write_console("[!] Target inválido.")
             return
 
-        for btn in self.scan_buttons:
-            if btn:
-                btn.configure(state='disabled')
+        self.is_scanning = True
+        self._apply_scanning_state(True)
 
         def on_finish(rc):
             def restore():
-                for btn in self.scan_buttons:
-                    if btn:
-                        btn.configure(state='normal')
+                self.is_scanning = False
+                self._apply_scanning_state(False)
             self.run_on_ui(restore)
 
         self.services.recon.start_scan(
@@ -119,4 +153,9 @@ class ReconView(BaseView):
         )
 
     def _on_stop_scan(self):
+        # Deshabilitar al instante para evitar doble pulsación; el on_finish del
+        # escaneo restaurará los botones cuando el proceso muera (pkill).
+        if self.btn_detener and self.btn_detener.winfo_exists():
+            self.btn_detener.config(style='Gray.TButton')
+            self.btn_detener.state(['disabled'])
         self.services.recon.stop_scan(on_output=self.write_console)

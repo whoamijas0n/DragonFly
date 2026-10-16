@@ -66,7 +66,18 @@ class ExplorerView(BaseView):
         self.show_console(parent=scroll.scrollable_frame)
 
     def view_file(self, file_path: str):
-        """Vuelca el contenido del archivo en la consola."""
-        contenido = SessionManager.read_file(file_path)
-        self.write_console(f"--- {os.path.basename(file_path)} ---")
-        self.write_console(contenido)
+        """Vuelca el contenido del archivo en la consola o analiza .cap con aircrack-ng."""
+        if file_path.endswith('.cap'):
+            self.write_console(f"[*] Analizando {os.path.basename(file_path)} con aircrack-ng...")
+            import subprocess
+            try:
+                out = subprocess.check_output(f"aircrack-ng '{file_path}'", shell=True, text=True, stderr=subprocess.STDOUT)
+                self.write_console(out)
+            except subprocess.CalledProcessError as e:
+                self.write_console(e.output or str(e))
+            except Exception as e:
+                self.write_console(f"[!] Error: {e}")
+        else:
+            contenido = SessionManager.read_file(file_path)
+            self.write_console(f"--- {os.path.basename(file_path)} ---")
+            self.write_console(contenido)

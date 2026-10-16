@@ -15,7 +15,7 @@ from dragonfly.ui.desktop.theme import (
     COLOR_BOTON_GRIS_HOVER,
     COLOR_BOTON_DESHABILITADO
 )
-from dragonfly.config import BASE_DIR_WIFI, BASE_DIR_EVIL
+from dragonfly.config import BASE_DIR_WIFI, BASE_DIR_EVIL, BASE_DIR_CLIENTS
 from dragonfly.core.hardware import get_wifi_interfaces
 
 
@@ -72,7 +72,8 @@ class WiFiView(BaseView):
             ("Ataque Evil Twin (Portal Cautivo)", self._flow_evil_twin_start, COLOR_BOTON_PELIGRO),
             ("Ataque de Desautenticación (Deauth)", self._flow_deauth_start, COLOR_BOTON_ROJO),
             ("Explorar Handshakes Capturados", lambda: self.app.views['explorer'].show_sessions(BASE_DIR_WIFI, "Handshakes", self.render), COLOR_BOTON_GRIS),
-            ("Explorar Credenciales Evil Twin", lambda: self.app.views['explorer'].show_sessions(BASE_DIR_EVIL, "Evil Twin", self.render), COLOR_BOTON_GRIS)
+            ("Explorar Credenciales Evil Twin", lambda: self.app.views['explorer'].show_sessions(BASE_DIR_EVIL, "Evil Twin", self.render), COLOR_BOTON_GRIS),
+            ("Explorar Clientes Conectados", lambda: self.app.views['explorer'].show_sessions(BASE_DIR_CLIENTS, "Clientes", self.render), COLOR_BOTON_GRIS)
         ]
 
         for texto, cmd, color in botones:

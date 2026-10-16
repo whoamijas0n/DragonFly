@@ -41,11 +41,28 @@ class RaspiApp(tk.Tk):
 
         screen_width = self.winfo_screenwidth() or 320
         screen_height = self.winfo_screenheight() or 240
-        self.geometry(f"{screen_width}x{screen_height}+0+0")
+        self.geometry(f"{screen_width}x{screen_height}")
+        self.resizable(True, True)
         self.configure(bg=COLOR_FONDO_PRINCIPAL)
 
         # Configuración de estilos ttk clam
         self.style = setup_ttk_styles()
+
+        # Fullscreen Kiosco (elimina barra de título del OS, minimizar, maximizar y bordes)
+        def aplicar_kiosco():
+            try:
+                self.attributes('-fullscreen', True)
+                self.attributes('-topmost', True)
+                self.lift()
+                self.focus_force()
+            except Exception:
+                pass
+        try:
+            self.attributes('-fullscreen', True)
+        except Exception:
+            pass
+        self.after(500, aplicar_kiosco)
+        self.after(1500, aplicar_kiosco)
 
         # Tecla Escape para salir
         self.bind("<Escape>", lambda event: self.destroy())

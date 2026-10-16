@@ -8,7 +8,8 @@ import time
 import random
 import subprocess
 import threading
-from dragonfly.config import BASE_DIR_WIFI
+from datetime import datetime
+from dragonfly.config import BASE_DIR_WIFI, BASE_DIR_CLIENTS
 from dragonfly.core.executor import CommandExecutor
 from dragonfly.core.process_manager import ProcessManager
 from dragonfly.core.session import SessionManager
@@ -91,6 +92,7 @@ class WiFiService:
         self.pm = process_manager or ProcessManager()
         self.active_mon_iface = None
         self._deauth_proc = None
+        self.multi_deauth_instance = None
 
     def enable_monitor_mode(self, iface: str) -> str:
         """
@@ -136,7 +138,12 @@ class WiFiService:
                             bssid = r[0].strip()
                             channel = r[3].strip()
                             essid = r[13].strip() if r[13].strip() else "<Oculta>"
-                            redes.append({"bssid": bssid, "ch": channel, "essid": essid})
+                            try:
+                                ch_int = int(channel)
+                                banda = '2.4GHz' if ch_int <= 14 else '5GHz'
+                            except Exception:
+                                banda = '2.4GHz'
+                            redes.append({"bssid": bssid, "ch": channel, "essid": essid, "banda": banda})
         except Exception:
             pass
         finally:
@@ -265,6 +272,183 @@ class WiFiService:
     def stop_deauth_attack(self):
         """Detiene el ataque deauth en curso."""
         self.pm.terminate_proc("deauth_active")
+        self.pm.pkill("aireplay-ng")
+
+    def scan_networks_dual(self, mon1: str, mon2: str, duration: int = 20):
+        """
+        Escanea el espectro con dos interfaces simultáneamente (útil para 2.4GHz + 5GHz).
+        Retorna (redes_unicas, iface_map).
+        """
+        prefix1 = f"/tmp/dual_scan1_{int(time.time())}_{random.randint(1000, 9999)}"
+        prefix2 = f"/tmp/dual_scan2_{int(time.time())}_{random.randint(1000, 9999)}"
+
+        cmd1 = f"sudo timeout -k 5 {duration}s airodump-ng {mon1} -w {prefix1} --output-format csv"
+        cmd2 = f"sudo timeout -k 5 {duration}s airodump-ng {mon2} -w {prefix2} --output-format csv"
+
+        p1 = subprocess.Popen(cmd1, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        p2 = subprocess.Popen(cmd2, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        p1.wait()
+        p2.wait()
+
+        redes = []
+        iface_map = {}
+
+        def parsear(prefix, mon_iface):
+            csv_file = f"{prefix}-01.csv"
+            try:
+                if os.path.exists(csv_file):
+                    with open(csv_file, "r", errors="ignore") as f:
+                        partes = f.read().split("Station MAC,")
+                        for linea in partes[0].split("\n")[2:]:
+                            r = linea.split(",")
+                            if len(r) >= 14 and ":" in r[0]:
+                                bssid = r[0].strip()
+                                ch = r[3].strip()
+                                essid = r[13].strip() or "<Oculta>"
+                                try:
+                                    banda = '2.4GHz' if int(ch) <= 14 else '5GHz'
+                                except Exception:
+                                    banda = '2.4GHz'
+                                redes.append({"bssid": bssid, "ch": ch, "essid": essid, "banda": banda})
+                                iface_map[bssid] = mon_iface
+            except Exception:
+                pass
+            finally:
+                for ext in ['-01.csv', '-01.cap', '-01.kismet.csv', '-01.kismet.netxml']:
+                    try:
+                        os.remove(f"{prefix}{ext}")
+                    except Exception:
+                        pass
+
+        parsear(prefix1, mon1)
+        parsear(prefix2, mon2)
+
+        redes_unicas = list({v['bssid']: v for v in redes}.values())
+        return redes_unicas, iface_map
+
+    def scan_clients_passive(self, mon_iface: str, bssid: str, channel: str, duration: int = 30):
+        """
+        Recopila clientes asociados a un BSSID de forma pasiva en su canal durante duration segundos.
+        """
+        prefix = f"/tmp/client_enum_{int(time.time())}_{random.randint(1000, 9999)}"
+        subprocess.run(["sudo", "iw", "dev", mon_iface, "set", "channel", str(channel)],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        cmd = f"sudo timeout -k 5 {duration}s airodump-ng --bssid {bssid} -c {channel} {mon_iface} -w {prefix} --output-format csv"
+        proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.pm.register("client_enum", proc)
+        proc.wait()
+
+        clientes = []
+        csv_file = f"{prefix}-01.csv"
+        try:
+            if os.path.exists(csv_file):
+                with open(csv_file, "r", errors="ignore") as f:
+                    partes = f.read().split("Station MAC,")
+                    if len(partes) > 1:
+                        for linea in partes[1].split("\n")[1:]:
+                            c = linea.split(",")
+                            if len(c) >= 6 and ":" in c[0]:
+                                clientes.append(c[0].strip())
+        except Exception:
+            pass
+        finally:
+            for ext in ['-01.csv', '-01.cap', '-01.kismet.csv', '-01.kismet.netxml']:
+                try:
+                    os.remove(f"{prefix}{ext}")
+                except Exception:
+                    pass
+
+        return clientes
+
+    def scan_clients_dual(self, targets: list, duration: int = 30):
+        """
+        targets es [(red1, mon1), (red2, mon2)]
+        Lanza escaneo de clientes en paralelo en ambas tarjetas.
+        Retorna [(red1, clientes1), (red2, clientes2)].
+        """
+        results = [None, None]
+        def worker(idx, red, mon):
+            clis = self.scan_clients_passive(mon, red['bssid'], red['ch'], duration=duration)
+            results[idx] = (red, clis)
+
+        threads = []
+        for i, (red, mon) in enumerate(targets[:2]):
+            t = threading.Thread(target=worker, args=(i, red, mon))
+            t.start()
+            threads.append(t)
+        for t in threads:
+            t.join()
+
+        return [r for r in results if r is not None]
+
+    def stop_client_enum(self):
+        """Detiene cualquier proceso airodump-ng de enumeración de clientes."""
+        self.pm.terminate_proc("client_enum")
+        self.pm.pkill("airodump-ng")
+
+    def save_client_results(self, data, is_dual: bool = False) -> str:
+        """
+        Guarda los resultados de enumeración en Resultados_Clientes/
+        """
+        timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+        prefix = "Clientes_Dual" if is_dual else "Clientes_Single"
+        res_dir = os.path.join(BASE_DIR_CLIENTS, f"{prefix}-{timestamp}")
+        os.makedirs(res_dir, exist_ok=True)
+
+        if is_dual:
+            filepath = os.path.join(res_dir, "clientes_dual.txt")
+            with open(filepath, "w") as f:
+                for red, macs in data:
+                    f.write(f"\n=== {red.get('essid', 'Desconocido')} ({red.get('banda', '')}, CH{red.get('ch', '')}) ===\n")
+                    f.write("\n".join(macs) if macs else "Sin clientes detectados\n")
+                    f.write("\n")
+        else:
+            red, clientes = data
+            filepath = os.path.join(res_dir, "clientes.txt")
+            with open(filepath, "w") as f:
+                f.write(f"ESSID: {red.get('essid', '')}\nBSSID: {red.get('bssid', '')}\n\nCLIENTES CONECTADOS:\n")
+                f.write("\n".join(clientes) if clientes else "No se detectaron clientes activos.\n")
+
+        return res_dir
+
+    def restore_wifi_system(self, mon_ifaces=None):
+        """
+        Detiene airodump, desactiva monitores y reinicia NetworkManager.
+        """
+        self.pm.pkill("airodump-ng")
+        self.pm.pkill("aireplay-ng")
+        if mon_ifaces:
+            if isinstance(mon_ifaces, str):
+                mon_ifaces = [mon_ifaces]
+            for m in mon_ifaces:
+                if m:
+                    subprocess.run(["sudo", "airmon-ng", "stop", m], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.pm.restart_network_manager()
+
+    def start_dual_deauth(self, mon1: str, mon2: str, red1: dict, red2: dict, burst: str = "0", callback=None):
+        """
+        Fija canales e inicia desautenticación dual en dos interfaces.
+        """
+        subprocess.run(["sudo", "iw", "dev", mon1, "set", "channel", str(red1['ch'])],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["sudo", "iw", "dev", mon2, "set", "channel", str(red2['ch'])],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        self.multi_deauth_instance = MultiDeauthAttack(
+            mon_ifaces=[mon1, mon2],
+            bssids=[red1['bssid'], red2['bssid']],
+            channels=[str(red1['ch']), str(red2['ch'])],
+            burst=burst,
+            callback=callback
+        )
+        self.multi_deauth_instance.start()
+        return self.multi_deauth_instance
+
+    def stop_dual_deauth(self):
+        """Detiene el ataque dual deauth."""
+        if self.multi_deauth_instance:
+            self.multi_deauth_instance.stop()
+            self.multi_deauth_instance = None
         self.pm.pkill("aireplay-ng")
 
     def list_saved_handshakes(self):

@@ -88,13 +88,47 @@ def setup_ttk_styles():
               background=[('pressed', '#8a4a00'), ('active', COLOR_BOTON_PELIGRO_HOVER)],
               foreground=[('pressed', '#000000'), ('active', '#0c0c0c')])
 
+    # BOTÓN MENÚ (Card style)
+    style.configure('Menu.TButton',
+                    background=COLOR_FONDO_CARD, foreground=COLOR_TEXTO_PRIMARIO,
+                    relief='flat', font=FONT_BODY,
+                    bordercolor=COLOR_BORDE_SUTIL, focuscolor=COLOR_BORDE_ACTIVO,
+                    borderwidth=1, focusthickness=1, padding=(10, 9), anchor='w')
+    style.map('Menu.TButton',
+              background=[('pressed', COLOR_BOTON_ROJO), ('active', '#282828')],
+              foreground=[('pressed', 'white'), ('active', COLOR_TEXTO_PRIMARIO)],
+              bordercolor=[('focus', COLOR_BORDE_ACTIVO), ('active', '#3a3a3a')])
+
+    # BOTÓN CON ICONO (App Grid)
+    style.configure('AppIcon.TButton',
+                    background=COLOR_FONDO_CARD, foreground=COLOR_TEXTO_PRIMARIO,
+                    relief='flat', font=('Courier', 8, 'bold'),
+                    borderwidth=0, padding=(4, 6))
+    style.map('AppIcon.TButton',
+              background=[('pressed', COLOR_BOTON_ROJO), ('active', '#282828')],
+              foreground=[('pressed', 'white'), ('active', COLOR_TEXTO_PRIMARIO)])
+
+    # CHECKBUTTON
+    style.configure('Dark.TCheckbutton',
+                    background=COLOR_FONDO_PRINCIPAL, foreground=COLOR_TEXTO_PRIMARIO,
+                    indicatorcolor='#2c2c2c', focuscolor='none',
+                    font=FONT_BODY, borderwidth=0)
+    style.map('Dark.TCheckbutton',
+              indicatorcolor=[('selected', COLOR_BOTON_ROJO), ('active', COLOR_BOTON_HOVER)],
+              foreground=[('active', 'white')])
+
     # ENTRY
     style.configure('Dark.TEntry', fieldbackground='#141414', foreground=COLOR_TEXTO_PRIMARIO,
                     insertcolor=COLOR_ROJO_BRIGHT, borderwidth=1, relief='flat')
 
     # SCROLLBAR
-    style.configure('Dark.Vertical.TScrollbar', background=COLOR_BOTON_GRIS, troughcolor=COLOR_FONDO_PRINCIPAL,
-                    borderwidth=0, relief='flat', width=8)
+    style.configure('Dark.Vertical.TScrollbar',
+                    background='#2a2a2a', troughcolor=COLOR_FONDO_PRINCIPAL,
+                    bordercolor=COLOR_FONDO_PRINCIPAL, arrowcolor='#555555',
+                    arrowsize=18, relief='flat', width=8)
+    style.map('Dark.Vertical.TScrollbar',
+              background=[('active', COLOR_BOTON_ROJO), ('pressed', COLOR_BOTON_HOVER)],
+              arrowcolor=[('active', 'white')])
 
     # OPTIONMENU / MENUBUTTON
     style.configure('Dark.TMenubutton', background=COLOR_BOTON_GRIS, foreground=COLOR_TEXTO_PRIMARIO,

