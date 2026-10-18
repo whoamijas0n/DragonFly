@@ -8,6 +8,7 @@ import re
 import subprocess
 from dragonfly.core.executor import CommandExecutor
 from dragonfly.core.hardware import get_network_interfaces, get_bluetooth_interfaces
+from dragonfly.core.subprocess_utils import safe_run, safe_check_output
 
 
 class SystemService:
@@ -64,9 +65,9 @@ class SystemService:
         Retorna lista de tuplas (mac, nombre).
         """
         try:
-            subprocess.run(f"sudo bluetoothctl --timeout {duration} scan on", shell=True,
+            safe_run(f"sudo bluetoothctl --timeout {duration} scan on", shell=True,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            salida = subprocess.check_output("sudo bluetoothctl devices", shell=True, text=True)
+            salida = safe_check_output("sudo bluetoothctl devices", shell=True, text=True)
             dispositivos = []
             for linea in salida.splitlines():
                 partes = linea.split(" ")
@@ -85,11 +86,11 @@ class SystemService:
         try:
             if on_output:
                 on_output(f"[*] Emparejando con {mac}...")
-            pair = subprocess.run(f"sudo bluetoothctl -- pair {mac}", shell=True, capture_output=True, text=True, timeout=30)
+            pair = safe_run(f"sudo bluetoothctl -- pair {mac}", shell=True, capture_output=True, text=True, timeout=30)
             if "Pairing successful" in pair.stdout or "Paired: yes" in pair.stdout:
                 if on_output:
                     on_output("[+] Emparejamiento exitoso. Conectando...")
-                conn = subprocess.run(f"sudo bluetoothctl -- connect {mac}", shell=True, capture_output=True, text=True, timeout=30)
+                conn = safe_run(f"sudo bluetoothctl -- connect {mac}", shell=True, capture_output=True, text=True, timeout=30)
                 if "Connection successful" in conn.stdout or "Connected: yes" in conn.stdout:
                     return "ÉXITO: Dispositivo conectado."
                 return f"ERROR: Fallo de conexión ({conn.stderr.strip()})"
@@ -116,11 +117,11 @@ class SystemService:
 
     def power_off(self):
         """Apaga el sistema de forma segura."""
-        subprocess.run("sudo poweroff", shell=True)
+        safe_run("sudo poweroff", shell=True)
 
     def reboot(self):
         """Reinicia el sistema de forma segura."""
-        subprocess.run("sudo reboot", shell=True)
+        safe_run("sudo reboot", shell=True)
 
     # -------------------------------------------------------------
     # CAMBIO DINÁMICO DE PERFILES USB OTG (RASPBERRY PI ZERO)
@@ -157,20 +158,20 @@ RemainAfterExit=yes
 [Install]
 WantedBy=sysinit.target
 """
-            subprocess.run(f"sudo sh -c 'echo \"{servicio_systemd}\" > {service_path}'", shell=True)
-            subprocess.run("sudo systemctl daemon-reload", shell=True)
+            safe_run(f"sudo sh -c 'echo \"{servicio_systemd}\" > {service_path}'", shell=True)
+            safe_run("sudo systemctl daemon-reload", shell=True)
 
         # 2. Configurar overlay en config.txt
-        subprocess.run(f"sudo sed -i '/dtoverlay=dwc2/d' {cfg}", shell=True)
+        safe_run(f"sudo sed -i '/dtoverlay=dwc2/d' {cfg}", shell=True)
 
         if modo == "host":
-            subprocess.run(f"sudo sh -c 'echo \"dtoverlay=dwc2,dr_mode=host\" >> {cfg}'", shell=True)
-            subprocess.run("sudo systemctl disable usb_gadget.service", shell=True, stderr=subprocess.DEVNULL)
+            safe_run(f"sudo sh -c 'echo \"dtoverlay=dwc2,dr_mode=host\" >> {cfg}'", shell=True)
+            safe_run("sudo systemctl disable usb_gadget.service", shell=True, stderr=subprocess.DEVNULL)
             if on_output:
                 on_output("[+] Modo Host puro configurado (Antena Wi-Fi/Periféricos externos).")
         else:
-            subprocess.run(f"sudo sh -c 'echo \"dtoverlay=dwc2,dr_mode=peripheral\" >> {cfg}'", shell=True)
-            subprocess.run("sudo systemctl enable usb_gadget.service", shell=True, stderr=subprocess.DEVNULL)
+            safe_run(f"sudo sh -c 'echo \"dtoverlay=dwc2,dr_mode=peripheral\" >> {cfg}'", shell=True)
+            safe_run("sudo systemctl enable usb_gadget.service", shell=True, stderr=subprocess.DEVNULL)
 
             # Generación de script libcomposite
             sh_script = """#!/bin/bash
@@ -249,8 +250,8 @@ ln -s functions/ecm.usb0 configs/c.1/
             with open("/tmp/usb_gadget.sh", "w") as f:
                 f.write(sh_script)
 
-            subprocess.run(f"sudo mv /tmp/usb_gadget.sh {gadget_script}", shell=True)
-            subprocess.run(f"sudo chmod +x {gadget_script}", shell=True)
+            safe_run(f"sudo mv /tmp/usb_gadget.sh {gadget_script}", shell=True)
+            safe_run(f"sudo chmod +x {gadget_script}", shell=True)
 
             if on_output:
                 on_output(f"[+] Perfil {modo.upper()} generado correctamente.")

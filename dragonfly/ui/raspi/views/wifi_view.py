@@ -505,8 +505,25 @@ class WiFiView(BaseView):
 
             def on_back_handshake():
                 if self.wifi_state.get("handshake_capturing"):
-                    self.services.wifi.stop_handshake_capture()
+                    if self.wifi_state.get("handshake_finishing"):
+                        return
+                    self.wifi_state["handshake_finishing"] = True
                     self.wifi_state["handshake_capturing"] = False
+                    self.write_console("[*] Deteniendo captura de handshake...")
+
+                    def cleanup_and_back():
+                        try:
+                            self.services.wifi.stop_handshake_capture()
+                            self.write_console("[+] Captura de handshake detenida.")
+                        except Exception as e:
+                            self.write_console(f"[!] Error al detener captura: {e}")
+                        finally:
+                            self.wifi_state["handshake_finishing"] = False
+                            self.run_on_ui(lambda: self._flow_handshake_show_networks([red]))
+
+                    threading.Thread(target=cleanup_and_back, daemon=True).start()
+                    return
+
                 self._flow_handshake_show_networks([red])
 
             def actualizar_gui():
@@ -585,6 +602,11 @@ class WiFiView(BaseView):
         threading.Thread(target=launch_worker, daemon=True).start()
 
     def _flow_handshake_finish(self):
+        # Evitar dobles pulsaciones mientras la limpieza está en curso
+        if self.wifi_state.get("handshake_finishing"):
+            return
+        self.wifi_state["handshake_finishing"] = True
+
         # Desactivar botón finalizar para prevenir doble clic y dar respuesta táctil inmediata
         if getattr(self, 'btn_handshake_finalizar', None) and self.btn_handshake_finalizar.winfo_exists():
             self.btn_handshake_finalizar.config(style='Gray.TButton')
@@ -596,11 +618,16 @@ class WiFiView(BaseView):
                 btn.config(style='Gray.TButton')
                 btn.state(['disabled'])
 
-        # Detener la captura y el ataque deauth de forma inmediata (idéntico a stop_deauth_attack)
-        self.services.wifi.stop_handshake_capture()
-        self.write_console("[+] Captura de handshake detenida. Restaurando red...")
+        self.write_console("[*] Deteniendo captura de handshake...")
 
-        def restore():
+        def cleanup():
+            # stop_handshake_capture() espera a sudo/airodump-ng: nunca en el hilo de Tkinter.
+            try:
+                self.services.wifi.stop_handshake_capture()
+                self.write_console("[+] Captura de handshake detenida. Restaurando red...")
+            except Exception as e:
+                self.write_console(f"[!] Error al detener captura: {e}")
+
             try:
                 mon = self.wifi_state.get("mon_iface")
                 self.services.wifi.restore_wifi_system(mon)
@@ -609,9 +636,10 @@ class WiFiView(BaseView):
             finally:
                 self.wifi_state["mon_iface"] = None
                 self.wifi_state["handshake_capturing"] = False
+                self.wifi_state["handshake_finishing"] = False
                 self.run_on_ui(self.render)
 
-        threading.Thread(target=restore, daemon=True).start()
+        threading.Thread(target=cleanup, daemon=True).start()
 
     # =========================================================================
     # 3. ATAQUE EVIL TWIN (SINGLE & DUAL-BAND)

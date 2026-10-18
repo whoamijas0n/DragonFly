@@ -12,6 +12,7 @@ from datetime import datetime
 from dragonfly.config import BASE_DIR_WIFI, BASE_DIR_CLIENTS
 from dragonfly.core.executor import CommandExecutor
 from dragonfly.core.process_manager import ProcessManager
+from dragonfly.core.subprocess_utils import safe_popen, safe_run
 from dragonfly.core.session import SessionManager
 
 
@@ -39,7 +40,7 @@ class MultiDeauthAttack:
                 self.mon_ifaces[i]
             ]
             self.callback(f"[*] Iniciando: {' '.join(cmd)}")
-            proc = subprocess.Popen(
+            proc = safe_popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
@@ -96,37 +97,43 @@ class WiFiService:
 
     def enable_monitor_mode(self, iface: str) -> str:
         """
-        Pone una interfaz en modo monitor usando airmon-ng eliminando procesos conflictivos.
+        Pone una interfaz en modo monitor de forma rápida y segura sin matar servicios globales.
         Retorna el nombre de la interfaz en modo monitor resultante (ej. 'wlan0mon' o 'wlan0').
         """
-        subprocess.run(["sudo", "airmon-ng", "check", "kill"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(["sudo", "airmon-ng", "start", iface], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            safe_run(["sudo", "airmon-ng", "start", iface], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+        except Exception:
+            pass
 
         mon = f"{iface}mon" if os.path.exists(f"/sys/class/net/{iface}mon") else iface
+        try:
+            safe_run(["sudo", "ip", "link", "set", iface, "down"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+            safe_run(["sudo", "iw", "dev", iface, "set", "type", "monitor"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+            safe_run(["sudo", "ip", "link", "set", iface, "up"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+        except Exception:
+            pass
+
         self.active_mon_iface = mon
         return mon
 
     def disable_monitor_mode(self, mon_iface: str):
         """
-        Detiene el modo monitor y restablece el gestor de red.
+        Detiene el modo monitor y restablece la interfaz física en modo managed de inmediato.
         """
         if mon_iface:
             try:
-                subprocess.run(["sudo", "airmon-ng", "stop", mon_iface], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+                safe_run(["sudo", "airmon-ng", "stop", mon_iface], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
             except Exception:
                 pass
 
-            # Si el adaptador no cambió de nombre (ej. wlan1 en vez de wlan1mon),
-            # asegurar que la interfaz física retorne a modo managed
             base_iface = mon_iface.replace("mon", "")
             try:
-                subprocess.run(["sudo", "ip", "link", "set", base_iface, "down"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
-                subprocess.run(["sudo", "iw", "dev", base_iface, "set", "type", "managed"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
-                subprocess.run(["sudo", "ip", "link", "set", base_iface, "up"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+                safe_run(["sudo", "ip", "link", "set", base_iface, "down"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+                safe_run(["sudo", "iw", "dev", base_iface, "set", "type", "managed"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+                safe_run(["sudo", "ip", "link", "set", base_iface, "up"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
             except Exception:
                 pass
 
-        self.pm.restart_network_manager(timeout=15)
         self.active_mon_iface = None
 
     def scan_networks(self, mon_iface: str, duration: int = 15):
@@ -138,7 +145,7 @@ class WiFiService:
         scan_prefix = f"/tmp/scan_wifi_{int(time.time())}_{random.randint(1000, 9999)}"
         cmd = f"sudo timeout -k 5 {duration}s airodump-ng {mon_iface} -w {scan_prefix} --output-format csv"
 
-        subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        safe_run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         redes = []
         csv_file = f"{scan_prefix}-01.csv"
@@ -177,7 +184,7 @@ class WiFiService:
         scan_prefix = f"/tmp/scan_clients_{int(time.time())}_{random.randint(1000, 9999)}"
         cmd = f"sudo timeout -k 5 {duration}s airodump-ng --bssid {bssid} -c {channel} {mon_iface} -w {scan_prefix} --output-format csv"
 
-        subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        safe_run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         clientes = []
         csv_file = f"{scan_prefix}-01.csv"
@@ -214,7 +221,7 @@ class WiFiService:
             on_output(f"[*] Iniciando captura airodump en {session_dir}...")
 
         # Iniciar airodump-ng
-        proc_airodump = subprocess.Popen(
+        proc_airodump = safe_popen(
             ["sudo", "airodump-ng", "--channel", str(ch), "--bssid", bssid, "-w", f"{session_dir}/Captura", mon_iface],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL
@@ -271,7 +278,7 @@ class WiFiService:
         Lanza un ataque de desautenticación dirigido o broadcast.
         """
         # Fijar canal
-        subprocess.run(["sudo", "iw", "dev", mon_iface, "set", "channel", str(target_red['ch'])],
+        safe_run(["sudo", "iw", "dev", mon_iface, "set", "channel", str(target_red['ch'])],
                        stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
 
         cmd = ["sudo", "aireplay-ng", "--deauth", str(count), "-a", target_red['bssid']]
@@ -282,7 +289,7 @@ class WiFiService:
         if on_output:
             on_output(f"[*] Ejecutando: {' '.join(cmd)}")
 
-        self._deauth_proc = subprocess.Popen(
+        self._deauth_proc = safe_popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -321,8 +328,8 @@ class WiFiService:
         cmd1 = f"sudo timeout -k 5 {duration}s airodump-ng {mon1} -w {prefix1} --output-format csv"
         cmd2 = f"sudo timeout -k 5 {duration}s airodump-ng {mon2} -w {prefix2} --output-format csv"
 
-        p1 = subprocess.Popen(cmd1, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        p2 = subprocess.Popen(cmd2, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        p1 = safe_popen(cmd1, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        p2 = safe_popen(cmd2, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         p1.wait()
         p2.wait()
 
@@ -367,10 +374,10 @@ class WiFiService:
         Recopila clientes asociados a un BSSID de forma pasiva en su canal durante duration segundos.
         """
         prefix = f"/tmp/client_enum_{int(time.time())}_{random.randint(1000, 9999)}"
-        subprocess.run(["sudo", "iw", "dev", mon_iface, "set", "channel", str(channel)],
+        safe_run(["sudo", "iw", "dev", mon_iface, "set", "channel", str(channel)],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         cmd = f"sudo timeout -k 5 {duration}s airodump-ng --bssid {bssid} -c {channel} {mon_iface} -w {prefix} --output-format csv"
-        proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        proc = safe_popen(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.pm.register("client_enum", proc)
         proc.wait()
 
@@ -449,7 +456,7 @@ class WiFiService:
 
     def restore_wifi_system(self, mon_ifaces=None):
         """
-        Detiene airodump, desactiva monitores y reinicia NetworkManager.
+        Detiene airodump, aireplay, desactiva monitores y levanta interfaces en modo managed.
         """
         try:
             self.executor.stop_current()
@@ -465,16 +472,16 @@ class WiFiService:
             for m in mon_ifaces:
                 if m:
                     self.disable_monitor_mode(m)
-        else:
-            self.pm.restart_network_manager(timeout=15)
+        elif self.active_mon_iface:
+            self.disable_monitor_mode(self.active_mon_iface)
 
     def start_dual_deauth(self, mon1: str, mon2: str, red1: dict, red2: dict, burst: str = "0", callback=None):
         """
         Fija canales e inicia desautenticación dual en dos interfaces.
         """
-        subprocess.run(["sudo", "iw", "dev", mon1, "set", "channel", str(red1['ch'])],
+        safe_run(["sudo", "iw", "dev", mon1, "set", "channel", str(red1['ch'])],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(["sudo", "iw", "dev", mon2, "set", "channel", str(red2['ch'])],
+        safe_run(["sudo", "iw", "dev", mon2, "set", "channel", str(red2['ch'])],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         self.multi_deauth_instance = MultiDeauthAttack(

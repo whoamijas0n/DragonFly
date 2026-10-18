@@ -4,9 +4,7 @@ Controla procesos en segundo plano como hostapd, dnsmasq, airodump-ng y limpieza
 """
 
 import subprocess
-import os
-import signal
-import time
+from dragonfly.core.subprocess_utils import safe_run, terminate_process_group
 
 
 class ProcessManager:
@@ -36,14 +34,8 @@ class ProcessManager:
         """
         proc = self._procs.get(name)
         if proc is not None:
-            try:
-                proc.terminate()
-                proc.wait(timeout=timeout)
-            except (subprocess.TimeoutExpired, Exception):
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
+            # Termina el grupo completo (sudo + binario) sin tocar el grupo propio.
+            terminate_process_group(proc, timeout=timeout)
             self._procs[name] = None
 
     def terminate_all(self, timeout: int = 5):
@@ -59,7 +51,7 @@ class ProcessManager:
             if " " in pattern or pattern.endswith(".py"):
                 cmd.append("-f")
             cmd.append(pattern)
-            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            safe_run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception:
             pass
 
@@ -71,7 +63,7 @@ class ProcessManager:
             if " " in pattern or pattern.endswith(".py"):
                 cmd.append("-f")
             cmd.append(pattern)
-            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            safe_run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception:
             pass
 
@@ -81,14 +73,14 @@ class ProcessManager:
         Limpia completamente las reglas NAT y de filtrado de iptables y restaura interfaces.
         """
         try:
-            subprocess.run(["sudo", "iptables", "--flush"], stderr=subprocess.DEVNULL)
-            subprocess.run(["sudo", "iptables", "--table", "nat", "--flush"], stderr=subprocess.DEVNULL)
-            subprocess.run(["sudo", "iptables", "-P", "FORWARD", "ACCEPT"], stderr=subprocess.DEVNULL)
+            safe_run(["sudo", "iptables", "--flush"], stderr=subprocess.DEVNULL)
+            safe_run(["sudo", "iptables", "--table", "nat", "--flush"], stderr=subprocess.DEVNULL)
+            safe_run(["sudo", "iptables", "-P", "FORWARD", "ACCEPT"], stderr=subprocess.DEVNULL)
             if ap_iface:
-                subprocess.run(["sudo", "ip", "link", "set", ap_iface, "down"], stderr=subprocess.DEVNULL)
-                subprocess.run(["sudo", "iw", "dev", ap_iface, "set", "type", "managed"], stderr=subprocess.DEVNULL)
-                subprocess.run(["sudo", "ip", "link", "set", ap_iface, "up"], stderr=subprocess.DEVNULL)
-                subprocess.run(["sudo", "ip", "addr", "flush", "dev", ap_iface], stderr=subprocess.DEVNULL)
+                safe_run(["sudo", "ip", "link", "set", ap_iface, "down"], stderr=subprocess.DEVNULL)
+                safe_run(["sudo", "iw", "dev", ap_iface, "set", "type", "managed"], stderr=subprocess.DEVNULL)
+                safe_run(["sudo", "ip", "link", "set", ap_iface, "up"], stderr=subprocess.DEVNULL)
+                safe_run(["sudo", "ip", "addr", "flush", "dev", ap_iface], stderr=subprocess.DEVNULL)
         except Exception:
             pass
 
@@ -96,7 +88,7 @@ class ProcessManager:
     def restart_network_manager(timeout: int = 15):
         """Reinicia el servicio NetworkManager con timeout de seguridad."""
         try:
-            subprocess.run(
+            safe_run(
                 ["sudo", "systemctl", "restart", "NetworkManager"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,

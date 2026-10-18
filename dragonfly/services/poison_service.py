@@ -10,6 +10,7 @@ import subprocess
 import threading
 from dragonfly.config import BASE_DIR_POISON
 from dragonfly.core.session import SessionManager
+from dragonfly.core.subprocess_utils import safe_run
 import modules.poison_logic as poison_logic
 
 
@@ -93,9 +94,9 @@ class PoisonService:
             thread.join(timeout=3)
 
         # Matado de seguridad para procesos huérfanos que sigan escuchando
-        subprocess.run(["sudo", "pkill", "-f", "responder"],
+        safe_run(["sudo", "pkill", "-f", "responder"],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(["sudo", "pkill", "-f", "dnsmasq"],
+        safe_run(["sudo", "pkill", "-f", "dnsmasq"],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         self._attack_instance = None

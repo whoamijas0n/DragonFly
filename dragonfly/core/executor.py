@@ -5,8 +5,8 @@ Aísla la interacción con el sistema operativo y gestiona el streaming hacia la
 
 import subprocess
 import threading
-import os
 import signal
+from dragonfly.core.subprocess_utils import safe_popen, safe_run, signal_process_group
 
 
 class CommandExecutor:
@@ -44,14 +44,13 @@ class CommandExecutor:
 
             proc = None
             try:
-                proc = subprocess.Popen(
+                proc = safe_popen(
                     comando,
                     shell=use_shell,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
-                    bufsize=1,
-                    preexec_fn=os.setsid if os.name == 'posix' else None
+                    bufsize=1
                 )
 
                 with self._lock:
@@ -94,29 +93,24 @@ class CommandExecutor:
         with self._lock:
             proc = self._active_proc
 
-        if proc is not None:
-            try:
-                if os.name == 'posix':
-                    # Matar grupo de procesos para asegurar que hijos mueran
-                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-                else:
-                    proc.terminate()
-                proc.wait(timeout=3)
-            except (subprocess.TimeoutExpired, ProcessLookupError, PermissionError):
-                try:
-                    if os.name == 'posix':
-                        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                    else:
-                        proc.kill()
-                except Exception:
-                    pass
+        if proc is None:
+            return
+
+        # SIGTERM al grupo del hijo; signal_process_group nunca alcanza nuestro grupo.
+        signal_process_group(proc, signal.SIGTERM)
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            signal_process_group(proc, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
 
     def run_sync(self, comando, use_shell=True, timeout=None):
         """
         Ejecuta un comando de forma bloqueante y retorna (stdout, stderr, returncode).
         """
         try:
-            res = subprocess.run(
+            res = safe_run(
                 comando,
                 shell=use_shell,
                 capture_output=True,

@@ -9,6 +9,7 @@ from dragonfly.config import BASE_DIR_NMAP, NMAP_PROFILES
 from dragonfly.core.executor import CommandExecutor
 from dragonfly.core.session import SessionManager
 from dragonfly.core.hardware import get_local_ip
+from dragonfly.core.subprocess_utils import safe_run
 
 
 class ReconService:
@@ -91,7 +92,7 @@ class ReconService:
         self.executor.stop_current()
         # Matado de seguridad adicional para procesos huérfanos
         import subprocess
-        subprocess.run(["sudo", "pkill", "-f", "nmap"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        safe_run(["sudo", "pkill", "-f", "nmap"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def list_saved_sessions(self):
         """Retorna las sesiones de auditoría de Nmap disponibles."""

@@ -7,6 +7,7 @@ import os
 import glob
 import socket
 import subprocess
+from dragonfly.core.subprocess_utils import safe_check_output
 
 
 def get_network_interfaces():
@@ -49,7 +50,7 @@ def get_bluetooth_interfaces():
     Retorna las interfaces Bluetooth detectadas en el sistema (ej. ['hci0']).
     """
     try:
-        salida = subprocess.check_output("hciconfig", shell=True, text=True, stderr=subprocess.DEVNULL)
+        salida = safe_check_output("hciconfig", shell=True, text=True, stderr=subprocess.DEVNULL)
         return [linea.split(":")[0].strip() for linea in salida.splitlines() if linea.startswith("hci")]
     except Exception:
         # Fallback a sysfs

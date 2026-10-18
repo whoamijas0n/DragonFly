@@ -7,6 +7,7 @@ import os
 import subprocess
 from dragonfly.config import DEFAULT_WORDLIST
 from dragonfly.core.executor import CommandExecutor
+from dragonfly.core.subprocess_utils import safe_run
 
 
 class CrackingService:
@@ -69,5 +70,5 @@ class CrackingService:
         if on_output:
             on_output("\n[!] Abortando el ataque de fuerza bruta...")
         self.executor.stop_current()
-        subprocess.run(["sudo", "pkill", "aircrack-ng"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        safe_run(["sudo", "pkill", "aircrack-ng"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.is_running = False

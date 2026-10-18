@@ -9,6 +9,7 @@ import glob
 import subprocess
 import threading
 from dragonfly.config import DIR_PAYLOADS
+from dragonfly.core.subprocess_utils import safe_popen, safe_run
 
 
 class DuckyService:
@@ -83,7 +84,7 @@ class DuckyService:
         self.is_running = True
         proc = None
         try:
-            proc = subprocess.Popen(
+            proc = safe_popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
@@ -140,7 +141,7 @@ class DuckyService:
             self.current_process = None
 
         # Limpieza global por si algún proceso quedó zombie
-        subprocess.run(
+        safe_run(
             ["sudo", "pkill", "-f", "ducky_logic"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )

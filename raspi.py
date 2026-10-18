@@ -14,7 +14,11 @@ if PROJECT_DIR not in sys.path:
 
 os.chdir(PROJECT_DIR)
 
+from dragonfly.core.subprocess_utils import ignore_job_control_signals
 from dragonfly.ui.raspi.app import run_raspi_app
+
+# Evita que sudo/hijos con use_pty congelen la interfaz con SIGTTIN/SIGTTOU.
+ignore_job_control_signals()
 
 if __name__ == "__main__":
     run_raspi_app()

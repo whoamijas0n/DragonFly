@@ -8,6 +8,7 @@ from tkinter import ttk
 from dragonfly.ui.raspi.views.base_view import BaseView
 from dragonfly.ui.raspi.widgets import ScrollableFrame
 from dragonfly.core.session import SessionManager
+from dragonfly.core.subprocess_utils import safe_check_output
 
 
 class ExplorerView(BaseView):
@@ -71,7 +72,7 @@ class ExplorerView(BaseView):
             self.write_console(f"[*] Analizando {os.path.basename(file_path)} con aircrack-ng...")
             import subprocess
             try:
-                out = subprocess.check_output(f"aircrack-ng '{file_path}'", shell=True, text=True, stderr=subprocess.STDOUT)
+                out = safe_check_output(f"aircrack-ng '{file_path}'", shell=True, text=True, stderr=subprocess.STDOUT)
                 self.write_console(out)
             except subprocess.CalledProcessError as e:
                 self.write_console(e.output or str(e))

