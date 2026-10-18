@@ -35,6 +35,8 @@ class WiFiView(BaseView):
         self.wifi_state = {}
         self.handshake_iface_btns = []
         self.handshake_client_btns = []
+        self.handshake_target_btns = []
+        self.btn_handshake_finalizar = None
         self.client_iface_btns = []
         self.client_scan_btns = []
         self.deauth_iface_btns = []
@@ -490,6 +492,7 @@ class WiFiView(BaseView):
 
     def _flow_handshake_select_client(self, red):
         self.wifi_state["target"] = red
+        self.wifi_state["handshake_capturing"] = False
         self.clear_frame()
         self.add_back_button(lambda: self._flow_handshake_show_networks([red]))
         ttk.Label(self.main_frame, text=f"ESCANEANDO CLIENTES\n{red['essid']}", style='Title.TLabel', justify='center').pack(pady=10)
@@ -500,30 +503,43 @@ class WiFiView(BaseView):
             mon = self.wifi_state["mon_iface"]
             clientes = self.services.wifi.scan_clients(mon, red['bssid'], red['ch'], duration=10)
 
+            def on_back_handshake():
+                if self.wifi_state.get("handshake_capturing"):
+                    self.services.wifi.stop_handshake_capture()
+                    self.wifi_state["handshake_capturing"] = False
+                self._flow_handshake_show_networks([red])
+
             def actualizar_gui():
                 self.clear_frame()
-                self.add_back_button(lambda: self._flow_handshake_show_networks([red]))
+                self.add_back_button(on_back_handshake)
                 ttk.Label(self.main_frame, text="CLIENTES ENCONTRADOS", style='Title.TLabel').pack(pady=2)
 
                 scroll = ScrollableFrame(self.main_frame, max_items=50)
                 scroll.pack(fill='both', expand=True, padx=5, pady=2)
 
                 self.handshake_client_btns = []
+                self.handshake_target_btns = []
 
+                # Botón de Finalizar Auditoría: siempre desbloqueado y visible
                 btn_fin = scroll.add_button(text="FINALIZAR AUDITORÍA", style='Danger.TButton', width=28,
                                             command=self._flow_handshake_finish)
+                self.btn_handshake_finalizar = btn_fin
                 if btn_fin:
                     self.handshake_client_btns.append(btn_fin)
 
+                # Opción Broadcast
                 btn_broad = scroll.add_button(text="Todos (Broadcast)", style='Danger.TButton', width=28,
                                               command=lambda: self._flow_handshake_launch("FF:FF:FF:FF:FF:FF"))
                 if btn_broad:
+                    self.handshake_target_btns.append(btn_broad)
                     self.handshake_client_btns.append(btn_broad)
 
+                # Clientes detectados
                 for mac in clientes:
                     btn = scroll.add_button(text=mac, style='Gray.TButton', width=28,
                                             command=lambda m=mac: self._flow_handshake_launch(m))
                     if btn:
+                        self.handshake_target_btns.append(btn)
                         self.handshake_client_btns.append(btn)
 
                 self.show_console(parent=scroll.scrollable_frame)
@@ -534,32 +550,68 @@ class WiFiView(BaseView):
         threading.Thread(target=worker, daemon=True).start()
 
     def _flow_handshake_launch(self, client_mac):
-        red = self.wifi_state["target"]
-        mon = self.wifi_state["mon_iface"]
+        if self.wifi_state.get("handshake_capturing"):
+            return
 
-        session_dir = self.services.wifi.start_handshake_capture(
-            mon_iface=mon,
-            target_red=red,
-            cliente_mac=client_mac,
-            on_output=self.write_console
-        )
-        self.write_console(f"[+] Captura activa guardándose en {session_dir}")
+        self.wifi_state["handshake_capturing"] = True
 
-    def _flow_handshake_finish(self):
-        for btn in getattr(self, 'handshake_client_btns', []):
+        # Bloquear opciones de clientes y broadcast en gris para que no se pueda seleccionar otro cliente
+        for btn in getattr(self, 'handshake_target_btns', []):
             if btn and btn.winfo_exists():
                 btn.config(style='Gray.TButton')
                 btn.state(['disabled'])
 
-        self.write_console("[*] Finalizando auditoría y restaurando red...")
+        # La opción de finalizar auditoría SIEMPRE tiene que estar desbloqueada
+        if getattr(self, 'btn_handshake_finalizar', None) and self.btn_handshake_finalizar.winfo_exists():
+            self.btn_handshake_finalizar.config(style='Danger.TButton')
+            self.btn_handshake_finalizar.state(['!disabled'])
 
-        def worker():
-            mon = self.wifi_state.get("mon_iface")
-            self.services.wifi.stop_handshake_audit(mon)
-            self.wifi_state["mon_iface"] = None
-            self.run_on_ui(self.render)
+        red = self.wifi_state["target"]
+        mon = self.wifi_state["mon_iface"]
 
-        threading.Thread(target=worker, daemon=True).start()
+        # Lanzar en segundo plano para no congelar la GUI en los tiempos de espera
+        def launch_worker():
+            try:
+                session_dir = self.services.wifi.start_handshake_capture(
+                    mon_iface=mon,
+                    target_red=red,
+                    cliente_mac=client_mac,
+                    on_output=self.write_console
+                )
+                self.write_console(f"[+] Captura activa guardándose en {session_dir}")
+            except Exception as e:
+                self.write_console(f"[!] Error al iniciar captura: {e}")
+
+        threading.Thread(target=launch_worker, daemon=True).start()
+
+    def _flow_handshake_finish(self):
+        # Desactivar botón finalizar para prevenir doble clic y dar respuesta táctil inmediata
+        if getattr(self, 'btn_handshake_finalizar', None) and self.btn_handshake_finalizar.winfo_exists():
+            self.btn_handshake_finalizar.config(style='Gray.TButton')
+            self.btn_handshake_finalizar.state(['disabled'])
+
+        # Asegurar que los botones objetivos sigan bloqueados en gris
+        for btn in getattr(self, 'handshake_target_btns', []):
+            if btn and btn.winfo_exists():
+                btn.config(style='Gray.TButton')
+                btn.state(['disabled'])
+
+        # Detener la captura y el ataque deauth de forma inmediata (idéntico a stop_deauth_attack)
+        self.services.wifi.stop_handshake_capture()
+        self.write_console("[+] Captura de handshake detenida. Restaurando red...")
+
+        def restore():
+            try:
+                mon = self.wifi_state.get("mon_iface")
+                self.services.wifi.restore_wifi_system(mon)
+            except Exception as e:
+                self.write_console(f"[!] Error al restaurar red: {e}")
+            finally:
+                self.wifi_state["mon_iface"] = None
+                self.wifi_state["handshake_capturing"] = False
+                self.run_on_ui(self.render)
+
+        threading.Thread(target=restore, daemon=True).start()
 
     # =========================================================================
     # 3. ATAQUE EVIL TWIN (SINGLE & DUAL-BAND)

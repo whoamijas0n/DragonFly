@@ -4,6 +4,8 @@ Diseñado específicamente para pantalla TFT de 320x240 táctil (GPIO/SPI) en Ra
 """
 
 import gc
+import queue
+import threading
 import tkinter as tk
 from tkinter import ttk
 from dragonfly.services import ServiceContainer
@@ -77,6 +79,10 @@ class RaspiApp(tk.Tk):
         self.main_frame = tk.Frame(self, bg=COLOR_FONDO_PRINCIPAL)
         self.main_frame.pack(fill='both', expand=True)
 
+        # Cola thread-safe para sincronización con hilos de fondo
+        self._ui_queue = queue.Queue()
+        self.after(30, self._poll_ui_queue)
+
         # Variables de búfer de consola táctil
         self.console_frame = None
         self.console_textbox = None
@@ -108,6 +114,20 @@ class RaspiApp(tk.Tk):
         # Iniciar con animación de splash
         self.views['inicio'].render_splash()
 
+    def _poll_ui_queue(self):
+        """Procesa tareas pendientes encoladas desde hilos secundarios en el hilo principal de Tkinter."""
+        try:
+            while True:
+                callback = self._ui_queue.get_nowait()
+                try:
+                    callback()
+                except Exception:
+                    pass
+        except queue.Empty:
+            pass
+        finally:
+            self.after(30, self._poll_ui_queue)
+
     def _actualizar_hud(self):
         """Actualiza la IP activa en el HUD inferior."""
         try:
@@ -121,6 +141,15 @@ class RaspiApp(tk.Tk):
 
     def limpiar_main_frame(self):
         """Limpia el contenido del main frame y fuerza recolección de basura."""
+        if self._console_after_id:
+            try:
+                self.after_cancel(self._console_after_id)
+            except Exception:
+                pass
+            self._console_after_id = None
+        self.console_pending = False
+        self.console_buffer.clear()
+
         for widget in self.main_frame.winfo_children():
             widget.destroy()
         self.back_btn = None
@@ -185,7 +214,11 @@ class RaspiApp(tk.Tk):
             self._console_drag_start_y = event.y
 
     def escribir_consola(self, texto: str):
-        """Agrega texto al buffer y programa un volcado por lotes (batching) cada 500ms."""
+        """Agrega texto al buffer de forma thread-safe y programa un volcado por lotes."""
+        if threading.current_thread() is not threading.main_thread():
+            self._ui_queue.put(lambda: self.escribir_consola(texto))
+            return
+
         self.console_buffer.append(texto)
         if not self.console_pending:
             self.console_pending = True

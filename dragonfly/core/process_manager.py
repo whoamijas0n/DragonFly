@@ -53,13 +53,25 @@ class ProcessManager:
 
     @staticmethod
     def pkill(pattern: str):
-        """Mata procesos por expresión regular usando pkill."""
+        """Mata procesos usando pkill (SIGTERM). Usa -f solo para scripts o patrones con espacios."""
         try:
-            subprocess.run(
-                ["sudo", "pkill", "-f", pattern],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
-            )
+            cmd = ["sudo", "pkill"]
+            if " " in pattern or pattern.endswith(".py"):
+                cmd.append("-f")
+            cmd.append(pattern)
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+
+    @staticmethod
+    def pkill_force(pattern: str):
+        """Mata procesos forzosamente con SIGKILL (-9)."""
+        try:
+            cmd = ["sudo", "pkill", "-9"]
+            if " " in pattern or pattern.endswith(".py"):
+                cmd.append("-f")
+            cmd.append(pattern)
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception:
             pass
 
@@ -81,13 +93,14 @@ class ProcessManager:
             pass
 
     @staticmethod
-    def restart_network_manager():
-        """Reinicia el servicio NetworkManager."""
+    def restart_network_manager(timeout: int = 15):
+        """Reinicia el servicio NetworkManager con timeout de seguridad."""
         try:
             subprocess.run(
                 ["sudo", "systemctl", "restart", "NetworkManager"],
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
+                stderr=subprocess.DEVNULL,
+                timeout=timeout
             )
         except Exception:
             pass

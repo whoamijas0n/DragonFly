@@ -2,6 +2,7 @@
 dragonfly/ui/raspi/views/base_view.py - Clase base para las vistas de Raspberry Pi (Tkinter).
 """
 
+import threading
 import tkinter as tk
 from tkinter import ttk
 
@@ -37,5 +38,13 @@ class BaseView:
         self.app.escribir_consola(text)
 
     def run_on_ui(self, callback):
-        """Invoca la función en el hilo de la GUI."""
-        self.app.after(0, callback)
+        """Invoca la función en el hilo de la GUI de forma segura entre hilos."""
+        if threading.current_thread() is threading.main_thread():
+            callback()
+        elif hasattr(self.app, '_ui_queue'):
+            self.app._ui_queue.put(callback)
+        else:
+            try:
+                self.app.after(0, callback)
+            except Exception:
+                pass

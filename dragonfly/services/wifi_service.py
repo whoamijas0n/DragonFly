@@ -111,8 +111,22 @@ class WiFiService:
         Detiene el modo monitor y restablece el gestor de red.
         """
         if mon_iface:
-            subprocess.run(["sudo", "airmon-ng", "stop", mon_iface], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        self.pm.restart_network_manager()
+            try:
+                subprocess.run(["sudo", "airmon-ng", "stop", mon_iface], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+            except Exception:
+                pass
+
+            # Si el adaptador no cambió de nombre (ej. wlan1 en vez de wlan1mon),
+            # asegurar que la interfaz física retorne a modo managed
+            base_iface = mon_iface.replace("mon", "")
+            try:
+                subprocess.run(["sudo", "ip", "link", "set", base_iface, "down"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+                subprocess.run(["sudo", "iw", "dev", base_iface, "set", "type", "managed"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+                subprocess.run(["sudo", "ip", "link", "set", base_iface, "up"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+            except Exception:
+                pass
+
+        self.pm.restart_network_manager(timeout=15)
         self.active_mon_iface = None
 
     def scan_networks(self, mon_iface: str, duration: int = 15):
@@ -210,24 +224,46 @@ class WiFiService:
         time.sleep(2)
 
         # Iniciar ráfaga deauth con aireplay-ng
-        cmd_deauth = f"sudo aireplay-ng -0 10 -a {bssid} -c {cliente_mac} {mon_iface}"
-        if on_output:
-            on_output(f"[*] Inyectando deauth a {cliente_mac}...")
+        if cliente_mac and cliente_mac.upper() != "FF:FF:FF:FF:FF:FF":
+            cmd_deauth = f"sudo aireplay-ng -0 10 -a {bssid} -c {cliente_mac} {mon_iface}"
+            if on_output:
+                on_output(f"[*] Inyectando deauth a {cliente_mac}...")
+        else:
+            cmd_deauth = f"sudo aireplay-ng -0 10 -a {bssid} {mon_iface}"
+            if on_output:
+                on_output("[*] Inyectando deauth en modo broadcast...")
 
         def on_after_deauth(rc):
             if on_output:
                 on_output(f"[+] Archivo CAP guardado en: {session_dir}")
-                on_output("[*] Esperando intercambio de 4 vías (handshake)...")
+                on_output("[*] Puede finalizar la auditoria")
             if on_finish:
                 on_finish(session_dir)
 
         self.executor.run_async(cmd_deauth, on_output=on_output, on_finish=on_after_deauth)
         return session_dir
 
+    def stop_handshake_capture(self):
+        """
+        Detiene los procesos de captura airodump y ataque deauth de handshake de forma inmediata.
+        """
+        try:
+            self.executor.stop_current()
+        except Exception:
+            pass
+
+        self.pm.terminate_proc("airodump_handshake", timeout=1)
+        self.pm.pkill("airodump-ng")
+        self.pm.pkill_force("airodump-ng")
+        self.pm.pkill("aireplay-ng")
+        self.pm.pkill_force("aireplay-ng")
+
     def stop_handshake_audit(self, mon_iface: str = None):
-        """Finaliza el airodump y restaura la red."""
-        self.pm.terminate_proc("airodump_handshake")
-        self.disable_monitor_mode(mon_iface or self.active_mon_iface)
+        """
+        Finaliza la captura de handshake y restaura la red usando el flujo estándar del sistema.
+        """
+        self.stop_handshake_capture()
+        self.restore_wifi_system(mon_iface or self.active_mon_iface)
 
     def start_deauth_attack(self, mon_iface: str, target_red: dict, cliente_mac: str = None,
                             count: str = "0", on_output=None, on_finish=None):
@@ -415,15 +451,22 @@ class WiFiService:
         """
         Detiene airodump, desactiva monitores y reinicia NetworkManager.
         """
+        try:
+            self.executor.stop_current()
+        except Exception:
+            pass
         self.pm.pkill("airodump-ng")
+        self.pm.pkill_force("airodump-ng")
         self.pm.pkill("aireplay-ng")
+        self.pm.pkill_force("aireplay-ng")
         if mon_ifaces:
             if isinstance(mon_ifaces, str):
                 mon_ifaces = [mon_ifaces]
             for m in mon_ifaces:
                 if m:
-                    subprocess.run(["sudo", "airmon-ng", "stop", m], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        self.pm.restart_network_manager()
+                    self.disable_monitor_mode(m)
+        else:
+            self.pm.restart_network_manager(timeout=15)
 
     def start_dual_deauth(self, mon1: str, mon2: str, red1: dict, red2: dict, burst: str = "0", callback=None):
         """
