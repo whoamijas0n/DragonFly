@@ -76,6 +76,23 @@ class JammerService:
         except Exception:
             return False
 
+    def ping(self, timeout_secs: float = 1.5) -> bool:
+        """
+        Round-trip STATUS real contra el firmware.
+
+        Devuelve True solo si el chip responde 'JAMMING_*'. Se usa para
+        validar handles previos antes de confiar en ellos (evita mostrar
+        'Conectado' con un puerto huérfano tras un hot-unplug o un reinicio
+        del ESP32).
+        """
+        try:
+            g = self.get_gadget()
+            if not g or not g.is_available():
+                return False
+            return g.ping(timeout_secs=timeout_secs)
+        except Exception:
+            return False
+
     def get_port(self) -> str:
         """Retorna el puerto serie asignado al dispositivo."""
         try:
@@ -89,6 +106,8 @@ class JammerService:
     def start_sweep_jam(self, module: int = 0, duration: int = 0, on_output=None) -> bool:
         """
         Inicia el barrido continuo de interferencias en la banda de 2.4 GHz.
+        Si el enlace no confirma el arranque, se reconstruye la conexión serie
+        y se reintenta una vez (autocuración, equivalente al botón Reconectar).
         """
         try:
             import serial
@@ -111,15 +130,26 @@ class JammerService:
             on_output(f"[*] Iniciando Sweep Jammer en {port_name}...")
 
         try:
-            success = g.sweep_jam(module, duration)
-            if success:
+            if g.sweep_jam(module, duration):
                 if on_output:
                     on_output("[+] Jamming activado.")
                 return True
-            else:
+
+            # Autocuración: el enlace pudo quedar inservible (reinicio del
+            # ESP32 por picos de corriente, descriptor huérfano, etc.).
+            if on_output:
+                on_output("[*] Sin confirmación del gadget; re-sincronizando enlace...")
+            self._destroy_gadget()
+            time.sleep(0.3)
+            g = self.get_gadget()
+            if g and g.is_available() and g.sweep_jam(module, duration):
                 if on_output:
-                    on_output("[!] Sin confirmación del Gadget.")
-                return False
+                    on_output("[+] Jamming activado.")
+                return True
+
+            if on_output:
+                on_output("[!] No se pudo confirmar el inicio del Jamming.")
+            return False
         except Exception as e:
             if on_output:
                 on_output(f"[!] Error al iniciar Jammer: {e}")

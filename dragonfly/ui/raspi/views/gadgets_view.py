@@ -24,11 +24,16 @@ class GadgetsView(BaseView):
 
         ttk.Label(self.main_frame, text="NRF24 JAMMER (ESP32)", style='Title.TLabel').pack(pady=2)
 
-        loading_lbl = ttk.Label(self.main_frame, text="Detectando puerto USB...", style='Gray.TLabel')
+        loading_lbl = ttk.Label(self.main_frame, text="Detectando/sincronizando gadget USB...", style='Gray.TLabel')
         loading_lbl.pack(pady=20)
 
         def async_check():
             connected = self.services.jammer.is_connected()
+            if connected:
+                # Validar el handle con un round-trip real: evita mostrar
+                # "Conectado" con un puerto huérfano (hot-unplug) o si el
+                # ESP32 se reinició después de la última sincronización.
+                connected = self.services.jammer.ping()
             if not connected:
                 g = self.services.jammer.get_gadget(force_reconnect=True)
                 connected = g.is_available() if g else False

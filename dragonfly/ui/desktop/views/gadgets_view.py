@@ -35,12 +35,16 @@ class GadgetsView(BaseView):
         ctk.CTkLabel(self.main_frame, text="NRF24 JAMMER (ESP32 BLUE-FLY)",
                      font=ctk.CTkFont(size=20, weight="bold")).pack(pady=(10, 5))
 
-        loading_lbl = ctk.CTkLabel(self.main_frame, text="Detectando hardware por USB...", text_color="#aaaaaa")
+        loading_lbl = ctk.CTkLabel(self.main_frame, text="Detectando/sincronizando hardware por USB...", text_color="#aaaaaa")
         loading_lbl.pack(pady=20)
         self.show_console()
 
         def async_check():
             conectado = self.services.jammer.is_connected()
+            if conectado:
+                # Validar el handle con un round-trip real: evita mostrar
+                # "Conectado" con un puerto huérfano o un ESP32 reiniciado.
+                conectado = self.services.jammer.ping()
             if not conectado:
                 g = self.services.jammer.get_gadget(force_reconnect=True)
                 conectado = g.is_available() if g else False

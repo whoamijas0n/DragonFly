@@ -66,7 +66,14 @@ class BLEGadget:
         return None
 
     def connect(self):
-        """Intenta abrir el puerto y sincronizar con el ESP32 (Soporte Hot-Plug)."""
+        """
+        Abre el puerto y sincroniza con el firmware (soporte hot-plug).
+
+        Nota de oro: NO se declara "listo" por texto de arranque del ESP32
+        (spam del bootloader, mensajes de radios o pretty-details). El pulso
+        DTR/RTS al abrir el puerto reinicia el chip (~2.5-4.5 s de boot), por
+        lo que la única prueba válida de vida es una respuesta real a STATUS.
+        """
         self._handle_disconnect() # Limpieza previa garantizada
         self._port = self._auto_detect_port(retries=4, delay=0.35)
         if not self._port:
@@ -92,77 +99,72 @@ class BLEGadget:
             except Exception:
                 pass
 
-            start = time.time()
-            ready = False
-            last_status_time = 0
-
-            # Ventana de sincronización de 4.5 segundos:
-            # Tolera tanto el reboot del ESP32 por DTR/RTS (~2.5s) como el caso
-            # donde ya estaba encendido y responde a STATUS periódicamente.
-            while time.time() - start < 4.5:
-                now = time.time()
-
-                # Emitir consulta STATUS cada 500ms para capturar al ESP32 tan pronto entra a loop()
-                if now - last_status_time >= 0.5:
-                    try:
-                        self._ser.write(b"STATUS\n")
-                        self._ser.flush()
-                        last_status_time = now
-                    except Exception:
-                        pass
-
-                try:
-                    line = self._ser.readline().decode(errors='ignore').strip()
-                    if line:
-                        # 1. Señal de arranque del firmware Blue-Fly
-                        if "Gadget listo" in line:
-                            ready = True
-                            break
-                        # 2. Respuestas al comando STATUS
-                        if "JAMMING_" in line or "JAM" in line or "IDLE" in line:
-                            ready = True
-                            break
-                        # 3. Confirmación de inicio de radios
-                        if "VSPI Started" in line or "HSPI Started" in line:
-                            # Gadget en fase de arranque; continuamos el ciclo
-                            pass
-                        # 4. Cualquier respuesta sustancial no errónea
-                        elif len(line) > 2 and "Unknown command" not in line and "STATUS" not in line and not line.startswith("ERROR:"):
-                            ready = True
-                            break
-                except Exception:
-                    break
-
-                time.sleep(0.05)
-
-            if not ready:
-                # Intento final de sondeo directo tras completar la ventana
-                try:
-                    self._ser.reset_input_buffer()
-                    self._ser.write(b"STATUS\n")
-                    self._ser.flush()
-                    time.sleep(0.25)
-                    resp = self._ser.readline().decode(errors='ignore').strip()
-                    if "JAM" in resp or "IDLE" in resp or "Gadget" in resp or len(resp) > 2:
-                        ready = True
-                except Exception:
-                    pass
-
-            if ready:
-                self._ser.timeout = self.timeout
-                try:
-                    self._ser.reset_input_buffer()
-                except Exception:
-                    pass
-                self._available = True
-                return True
-            else:
+            if not self._sync_with_firmware(window=7.0):
                 self._handle_disconnect()
                 return False
+
+            self._ser.timeout = self.timeout
+            try:
+                self._ser.reset_input_buffer()
+            except Exception:
+                pass
+            self._available = True
+            return True
 
         except Exception:
             self._handle_disconnect()
             return False
+
+    def _sync_with_firmware(self, window=7.0) -> bool:
+        """
+        Ventana de sincronización estricta con el ESP32.
+
+        Consulta STATUS cada 400 ms e ignora TODO el spam de arranque
+        (ROM, 'VSPI/HSPI Started', printPrettyDetails, errores no fatales).
+        Solo aprueba como listo:
+          1. Una respuesta real 'JAMMING_*' (el firmware está en loop()).
+          2. 'Gadget listo' confirmado con un round-trip STATUS inmediato.
+        La ventana cubre el reinicio del ESP32 provocado por el pulso
+        DTR/RTS al abrir el puerto por primera vez.
+        """
+        start = time.time()
+        last_status_time = 0
+        listo_candidato = False
+
+        while time.time() - start < window:
+            now = time.time()
+
+            # Emitir consulta STATUS periódicamente (o inmediata tras 'Gadget listo')
+            if listo_candidato or (now - last_status_time >= 0.4):
+                try:
+                    self._ser.write(b"STATUS\n")
+                    self._ser.flush()
+                except Exception:
+                    return False
+                last_status_time = now
+                listo_candidato = False
+
+            try:
+                line = self._ser.readline().decode(errors='ignore').strip()
+            except Exception:
+                return False
+
+            if not line:
+                continue
+
+            # 1. Respuesta real del firmware: prueba de vida y de loop()
+            if line.startswith("JAMMING_"):
+                return True
+
+            # 2. Fin de setup(): candidato, pero exige verificación real
+            if "Gadget listo" in line:
+                listo_candidato = True
+                continue
+
+            # 3. Cualquier otra línea (spam de arranque, ERROR no fatal):
+            #    ignorada a propósito; seguimos esperando una prueba real.
+
+        return False
 
     def reconnect(self):
         """Cierra conexión actual e intenta reconectar."""
@@ -211,6 +213,15 @@ class BLEGadget:
             return ""
         return line
 
+    def _flush_input(self):
+        """Descarta lecturas residuales (spam de arranque, respuestas viejas)."""
+        if not self.is_available():
+            return
+        try:
+            self._ser.reset_input_buffer()
+        except Exception:
+            pass
+
     def _wait_for_ack(self, expected_prefix, timeout_secs=5):
         start = time.time()
         while time.time() - start < timeout_secs:
@@ -219,12 +230,57 @@ class BLEGadget:
                 return True
         return False
 
-    def sweep_jam(self, module: int, duration_sec: int):
-        try:
-            self._send_command(f"SWEEP_JAM {module} {duration_sec}")
-            return self._wait_for_ack("JAMMING_STARTED", 3)
-        except RuntimeError:
+    def ping(self, timeout_secs=1.5) -> bool:
+        """
+        Round-trip STATUS real: True solo si el firmware responde 'JAMMING_*'.
+        Verificación ligera de vida del enlace (para validar handles previos).
+        """
+        if not self.is_available():
             return False
+        try:
+            with self._lock:
+                self._ser.reset_input_buffer()
+                self._ser.timeout = 0.25
+                self._ser.write(b"STATUS\n")
+                self._ser.flush()
+            start = time.time()
+            while time.time() - start < timeout_secs:
+                try:
+                    line = self._ser.readline().decode(errors='ignore').strip()
+                except (serial.SerialException, OSError):
+                    self._handle_disconnect()
+                    return False
+                if line.startswith("JAMMING_"):
+                    return True
+            return False
+        except Exception:
+            self._handle_disconnect()
+            return False
+        finally:
+            try:
+                if self._ser and self._ser.is_open:
+                    self._ser.timeout = self.timeout
+            except Exception:
+                pass
+
+    def sweep_jam(self, module: int, duration_sec: int):
+        """
+        Envía SWEEP_JAM y espera el ACK 'JAMMING_STARTED'.
+
+        Reintenta una vez tras descartar residuos: cubre ACKs perdidos por
+        reinicios del ESP32 (picos de corriente al arrancar la RF/brownout)
+        o respuestas que quedaron en el búfer.
+        """
+        cmd = f"SWEEP_JAM {module} {duration_sec}"
+        for _ in range(2):
+            try:
+                self._flush_input()
+                self._send_command(cmd)
+            except RuntimeError:
+                return False
+            if self._wait_for_ack("JAMMING_STARTED", 3):
+                return True
+        return False
 
     def stop(self, module: int):
         try:
@@ -233,16 +289,23 @@ class BLEGadget:
                 self._stop_events[module].set()
                 self._send_command(f"STOP {module}")
             else:
+                self._flush_input()
                 self._send_command(f"STOP {module}")
                 return self._wait_for_ack("STOPPED", 2)
         except RuntimeError:
             pass
 
     def status(self) -> str:
+        """Consulta STATUS esperando una respuesta 'JAMMING_*' real."""
         try:
+            self._flush_input()
             self._send_command("STATUS")
-            line = self._read_line()
-            return line if line else "ERROR: sin respuesta"
+            start = time.time()
+            while time.time() - start < 2.0:
+                line = self._read_line()
+                if line.startswith("JAMMING_"):
+                    return line
+            return "ERROR: sin respuesta"
         except RuntimeError:
             return "ERROR: Gadget desconectado"
 
