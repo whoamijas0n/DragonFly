@@ -152,10 +152,12 @@ La interfaz permite gestionar el ciclo de vida del ataque subyacente (ejecutado 
 
 Conjunto de herramientas de soporte operacional, ampliado para gestionar los nuevos perfiles de hardware y conexiones de red de forma nativa:
 
-- **Cambio de Perfil USB**: Permite reconfigurar el puerto OTG de la Pi Zero con reinicio controlado. Opciones disponibles:
-  - **Modo Host**: Para conectar antenas Wi-Fi externas o periféricos.
+- **Cambio de Perfil USB (Gadget Compuesto)**: Reconfigura el puerto OTG de la Pi Zero. Los perfiles gadget se construyen y conmutan **en caliente, sin reiniciar**, y pueden combinar funciones:
+  - **Modo Host**: Para conectar antenas Wi-Fi externas o periféricos (único caso que requiere reinicio).
   - **Rubber Ducky (HID)**: Emula un teclado USB.
-  - **Poison (Red USB)**: Despliega un submenú para elegir entre el perfil de red para **Windows (RNDIS)** o **Mac/Linux (CDC ECM)**.
+  - **Poison Windows (RNDIS)** / **Poison Mac/Linux (CDC ECM)**: Emula un adaptador de red USB.
+  - **Ducky + Poison (HID+RNDIS / HID+ECM)**: Teclado y red simultáneos en un solo gadget.
+  El perfil activo se persiste y se reconstruye automáticamente en cada arranque mediante `usb_gadget.service`.
 - **Gestor de Redes Wi-Fi**: Escaneo de redes, conexión táctil (con teclado alfanumérico emergente) y gestión de redes previamente guardadas mediante `nmcli`.
 - **Gestor Bluetooth**: Escaneo, emparejamiento y conexión a dispositivos Bluetooth directamente desde la GUI utilizando `bluetoothctl`.
 - **Sistema**: Monitoreo de almacenamiento, RAM, uso de CPU, conexiones activas, actualización del sistema (APT) y opciones de energía (Reiniciar/Apagar).
@@ -256,18 +258,26 @@ ENTER
 ```
 
 ---
-### Cambio de Interfaz USB: Host, HID y Red (Poison)
+### Cambio de Interfaz USB: Gadget Compuesto (Host, HID y Red)
 
-La Pi Zero 2 W dispone de un único puerto USB OTG. La suite aprovecha el framework `libcomposite` y el subsistema `configfs` del kernel para reescribir dinámicamente los descriptores USB, permitiendo que la placa asuma diferentes identidades ante el ordenador víctima. Modificar este comportamiento requiere un reinicio completo del sistema, proceso que la GUI automatiza.
+La Pi Zero 2 W dispone de un único puerto USB OTG. La suite aprovecha el framework `libcomposite` y el subsistema `configfs` del kernel para reescribir dinámicamente los descriptores USB, permitiendo que la placa asuma diferentes identidades ante el ordenador víctima.
 
-Los perfiles disponibles desde el menú "Utilidades OS" son:
+El motor `dragonfly/core/usb_gadget.py` construye, destruye y **conmuta las funciones del gadget en caliente, sin reiniciar**, mientras el puerto esté en modo periférico. Cada conmutación tarda unos segundos y el host ve una desconexión/reconexión USB. El único cambio que exige reinicio es alternar entre **host** y **periférico**, porque `dr_mode` se fija en `/boot/firmware/config.txt` al arrancar.
 
-- **Modo Host (`dr_mode=host`)**: La Pi actúa como controladora, habilitando el uso de tarjetas de red inalámbricas externas o hubs USB.
-- **Modo Gadget HID (Rubber Ducky)**: Emula un teclado USB genérico (`idVendor=0x1d6b`, `idProduct=0x0104`). Habilita el dispositivo `/dev/hidg0` para la inyección de pulsaciones del módulo Ducky.
-- **Modo Gadget de Red RNDIS (Poison - Windows)**: Emula un adaptador de red compatible con el protocolo NDIS remoto de Microsoft (`idVendor=0x0525`, `idProduct=0xa4a2`). Presenta al host víctima un dispositivo "DragonFly RNDIS Ethernet".
-- **Modo Gadget de Red CDC ECM (Poison - Mac/Linux)**: Emula un adaptador de red estándar CDC ECM (`idVendor=0x0525`, `idProduct=0xa4a1`). El script de generación (`usb_gadget.sh`) está programado para asignar una **dirección MAC aleatoria** (`HOST_MAC`) en cada inicialización. Esto es una contramedida crítica para evitar que gestores de red estrictos (como NetworkManager en distribuciones Linux modernas) bloqueen o ignoren la interfaz tras múltiples conexiones.
+Perfiles disponibles desde el menú "Utilidades OS" (los gadget se aplican al instante):
 
-*Nota técnica: Al seleccionar un perfil de Gadget, la aplicación genera dinámicamente el script `/usr/local/bin/usb_gadget.sh` con los descriptores precisos, lo enlaza mediante un servicio `systemd` (`usb_gadget.service`) de ejecución única (oneshot) y reconfigura las superposiciones del kernel en `/boot/firmware/config.txt` antes de reiniciar.*
+- **Modo Host (`dr_mode=host`)**: La Pi actúa como controladora, habilitando el uso de tarjetas de red inalámbricas externas o hubs USB. Requiere reinicio.
+- **Rubber Ducky (HID)**: Emula un teclado USB genérico (`idVendor=0x1d6b`, `idProduct=0x0104`). Habilita el dispositivo `/dev/hidg0` para la inyección de pulsaciones del módulo Ducky.
+- **Poison Windows (RNDIS)**: Emula un adaptador de red compatible con el protocolo NDIS remoto de Microsoft (`idVendor=0x0525`, `idProduct=0xa4a2`) con los descriptores Microsoft OS necesarios para la asociación automática del driver en Windows.
+- **Poison Mac/Linux (CDC ECM)**: Emula un adaptador de red estándar CDC ECM (`idVendor=0x0525`, `idProduct=0xa4a1`). Se asigna una **dirección MAC aleatoria** (`host_addr`) en cada inicialización. Esto es una contramedida crítica para evitar que gestores de red estrictos (como NetworkManager en distribuciones Linux modernas) bloqueen o ignoren la interfaz tras múltiples conexiones.
+- **Ducky + Poison Windows (HID+RNDIS)** / **Ducky + Poison Linux (HID+ECM)**: teclado y red simultáneos sobre un mismo gadget compuesto (base para el control remoto y la exfiltración).
+
+*Nota técnica: el perfil elegido se persiste en `/etc/dragonfly/gadget_profile` y se reconstruye automáticamente en cada arranque mediante `/usr/local/bin/usb_gadget.sh` y el servicio `usb_gadget.service` (oneshot). La administración manual también está disponible por CLI:*
+
+```bash
+sudo python3 -m dragonfly.core.usb_gadget status
+sudo python3 -m dragonfly.core.usb_gadget apply hid_rndis
+```
 
 ---
 

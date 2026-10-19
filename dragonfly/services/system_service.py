@@ -9,6 +9,7 @@ import subprocess
 from dragonfly.core.executor import CommandExecutor
 from dragonfly.core.hardware import get_network_interfaces, get_bluetooth_interfaces
 from dragonfly.core.subprocess_utils import safe_run, safe_check_output
+from dragonfly.core import usb_gadget
 
 
 class SystemService:
@@ -124,136 +125,73 @@ class SystemService:
         safe_run("sudo reboot", shell=True)
 
     # -------------------------------------------------------------
-    # CAMBIO DINÁMICO DE PERFILES USB OTG (RASPBERRY PI ZERO)
+    # PERFILES USB OTG (RASPBERRY PI ZERO) - GADGET COMPUESTO
     # -------------------------------------------------------------
-    def configure_usb_gadget_profile(self, modo: str, on_output=None) -> bool:
+    def get_usb_gadget_status(self) -> dict:
         """
-        Reconfigura el puerto OTG de la Raspberry Pi Zero (Host, Rubber Ducky HID, RNDIS, ECM).
-        Genera el script libcomposite y actualiza config.txt.
+        Retorna el estado actual del gadget USB (perfil activo, modo OTG,
+        interfaces, servicio de arranque) para mostrarlo en la interfaz.
         """
-        modo = modo.lower()
-        if modo not in ["host", "gadget", "rndis", "ecm"]:
-            if on_output:
-                on_output(f"[!] Perfil no soportado: {modo}")
-            return False
+        return usb_gadget.status()
 
-        if on_output:
-            on_output(f"[*] Configurando perfil USB: {modo.upper()}...")
+    def configure_usb_gadget_profile(self, modo: str, on_output=None) -> dict:
+        """
+        Aplica un perfil USB OTG.
 
-        cfg = "/boot/firmware/config.txt" if os.path.exists("/boot/firmware/config.txt") else "/boot/config.txt"
-        gadget_script = "/usr/local/bin/usb_gadget.sh"
-        service_path = "/etc/systemd/system/usb_gadget.service"
+        - Perfiles gadget (hid, ecm, rndis, hid_ecm, hid_rndis): se construyen y
+          conmutan EN CALIENTE si el puerto ya está en modo periférico (sin reinicio).
+        - Perfil host: actualiza config.txt, deshabilita el gadget y exige reinicio.
+        - Si el puerto estaba en host y se pide un perfil gadget, se deja configurado
+          para el siguiente arranque y se avisa que hace falta reiniciar UNA vez.
 
-        # 1. Asegurar servicio systemd
-        if not os.path.exists(service_path):
-            servicio_systemd = """[Unit]
-Description=USB HID/Net Gadget Initialization
-After=systemd-modules-load.service
+        Retorna {'ok': bool, 'mode': 'live'|'reboot'|'error', 'message': str}.
+        """
+        log = on_output if callable(on_output) else (lambda _m: None)
+        key = usb_gadget.normalize_profile(modo)
 
-[Service]
-Type=oneshot
-ExecStart=/bin/bash /usr/local/bin/usb_gadget.sh
-RemainAfterExit=yes
+        if key == "host":
+            usb_gadget.teardown(log)
+            usb_gadget.set_dr_mode("host", log)
+            usb_gadget.disable_service(log)
+            return {
+                "ok": True,
+                "mode": "reboot",
+                "message": "[!] Modo Host configurado. El sistema se apagará para que reconecte los periféricos USB.",
+            }
 
-[Install]
-WantedBy=sysinit.target
-"""
-            safe_run(f"sudo sh -c 'echo \"{servicio_systemd}\" > {service_path}'", shell=True)
-            safe_run("sudo systemctl daemon-reload", shell=True)
+        if key not in usb_gadget.PROFILES:
+            log(f"[!] Perfil no soportado: {modo}")
+            return {"ok": False, "mode": "error", "message": f"Perfil no soportado: {modo}"}
 
-        # 2. Configurar overlay en config.txt
-        safe_run(f"sudo sed -i '/dtoverlay=dwc2/d' {cfg}", shell=True)
+        # Activos de arranque (script + systemd) y perfil persistente, siempre al día.
+        usb_gadget.install_boot_assets(log)
+        usb_gadget.persist_profile(key, log)
 
-        if modo == "host":
-            safe_run(f"sudo sh -c 'echo \"dtoverlay=dwc2,dr_mode=host\" >> {cfg}'", shell=True)
-            safe_run("sudo systemctl disable usb_gadget.service", shell=True, stderr=subprocess.DEVNULL)
-            if on_output:
-                on_output("[+] Modo Host puro configurado (Antena Wi-Fi/Periféricos externos).")
-        else:
-            safe_run(f"sudo sh -c 'echo \"dtoverlay=dwc2,dr_mode=peripheral\" >> {cfg}'", shell=True)
-            safe_run("sudo systemctl enable usb_gadget.service", shell=True, stderr=subprocess.DEVNULL)
+        if not usb_gadget.is_peripheral_mode():
+            # El OTG está en host: se programa el perfil y se pide UN reinicio.
+            usb_gadget.set_dr_mode("peripheral", log)
+            usb_gadget.enable_service(log)
+            etiqueta = usb_gadget.PROFILE_LABELS.get(key, key)
+            mensaje = (
+                f"[!] El puerto OTG estaba en modo Host. Perfil '{etiqueta}' programado: "
+                "REINICIA la Raspberry Pi para activarlo. Después, los cambios de perfil serán en caliente."
+            )
+            log(mensaje)
+            return {"ok": True, "mode": "reboot", "message": mensaje}
 
-            # Generación de script libcomposite
-            sh_script = """#!/bin/bash
-modprobe libcomposite
-cd /sys/kernel/config/usb_gadget/
+        # Modo periférico: conmutación en caliente sin reinicio.
+        if usb_gadget.current_profile() == key:
+            log(f"[*] El perfil '{key}' ya está activo.")
+            return {"ok": True, "mode": "live", "message": f"El perfil '{key}' ya estaba activo."}
 
-for dir in /sys/kernel/config/usb_gadget/*; do
-    if [ -d "$dir" ]; then
-        echo "" > "$dir/UDC" 2>/dev/null
-        sleep 0.2
-        rm -rf "$dir" 2>/dev/null
-    fi
-done
+        log(f"[*] Conmutando gadget USB en caliente al perfil '{key}'...")
+        ok = usb_gadget.apply(key, log)
+        if ok:
+            etiqueta = usb_gadget.PROFILE_LABELS.get(key, key)
+            mensaje = f"[+] Perfil '{etiqueta}' activo en caliente (sin reinicio)."
+            log(mensaje)
+            return {"ok": True, "mode": "live", "message": mensaje}
 
-if [ -d dragonfly ]; then
-    echo "" > dragonfly/UDC 2>/dev/null
-    sleep 0.2
-    rm -rf dragonfly 2>/dev/null
-fi
-
-mkdir -p dragonfly
-cd dragonfly
-"""
-            if modo == "rndis":
-                sh_script += "echo 0x0525 > idVendor\necho 0xa4a2 > idProduct\n"
-            elif modo == "ecm":
-                sh_script += "echo 0x0525 > idVendor\necho 0xa4a1 > idProduct\n"
-            else:  # gadget (Rubber Ducky)
-                sh_script += "echo 0x1d6b > idVendor\necho 0x0104 > idProduct\n"
-
-            sh_script += """echo 0x0100 > bcdDevice
-echo 0x0200 > bcdUSB
-mkdir -p strings/0x409
-echo "fedcba9876543210" > strings/0x409/serialnumber
-echo "DragonFly" > strings/0x409/manufacturer
-"""
-            if modo == "gadget":
-                sh_script += 'echo "DragonFly HID (Keyboard)" > strings/0x409/product\n'
-            elif modo == "rndis":
-                sh_script += 'echo "DragonFly RNDIS Ethernet" > strings/0x409/product\n'
-            elif modo == "ecm":
-                sh_script += 'echo "DragonFly CDC ECM Ethernet" > strings/0x409/product\n'
-
-            sh_script += """mkdir -p configs/c.1/strings/0x409
-echo "Config 1" > configs/c.1/strings/0x409/configuration
-echo 250 > configs/c.1/MaxPower
-"""
-            if modo == "gadget":
-                sh_script += """mkdir -p functions/hid.usb0
-echo 1 > functions/hid.usb0/protocol
-echo 1 > functions/hid.usb0/subclass
-echo 8 > functions/hid.usb0/report_length
-printf "\\\\x05\\\\x01\\\\x09\\\\x06\\\\xa1\\\\x01\\\\x05\\\\x07\\\\x19\\\\xe0\\\\x29\\\\xe7\\\\x15\\\\x00\\\\x25\\\\x01\\\\x75\\\\x01\\\\x95\\\\x08\\\\x81\\\\x02\\\\x95\\\\x01\\\\x75\\\\x08\\\\x81\\\\x03\\\\x95\\\\x05\\\\x75\\\\x01\\\\x05\\\\x08\\\\x19\\\\x01\\\\x29\\\\x05\\\\x91\\\\x02\\\\x95\\\\x01\\\\x75\\\\x03\\\\x91\\\\x03\\\\x95\\\\x06\\\\x75\\\\x08\\\\x15\\\\x00\\\\x25\\\\x65\\\\x05\\\\x07\\\\x19\\\\x00\\\\x29\\\\x65\\\\x81\\\\x00\\\\xc0" > functions/hid.usb0/report_desc
-ln -s functions/hid.usb0 configs/c.1/
-"""
-            elif modo == "rndis":
-                sh_script += """mkdir -p functions/rndis.usb0
-echo 1 > os_desc/use
-echo 0xcd > os_desc/b_vendor_code
-echo MSFT100 > os_desc/qw_sign
-mkdir -p functions/rndis.usb0/os_desc/interface.rndis
-echo RNDIS > functions/rndis.usb0/os_desc/interface.rndis/compatible_id
-echo 5162001 > functions/rndis.usb0/os_desc/interface.rndis/sub_compatible_id
-ln -s functions/rndis.usb0 configs/c.1/
-ln -s configs/c.1 os_desc
-"""
-            elif modo == "ecm":
-                sh_script += """mkdir -p functions/ecm.usb0
-HOST_MAC=$(printf '02:%02x:%02x:%02x:%02x:%02x' $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)))
-echo "$HOST_MAC" > functions/ecm.usb0/host_addr
-echo "02:11:22:33:44:56" > functions/ecm.usb0/dev_addr
-ln -s functions/ecm.usb0 configs/c.1/
-"""
-            sh_script += "ls /sys/class/udc > UDC\nsleep 2\n"
-
-            with open("/tmp/usb_gadget.sh", "w") as f:
-                f.write(sh_script)
-
-            safe_run(f"sudo mv /tmp/usb_gadget.sh {gadget_script}", shell=True)
-            safe_run(f"sudo chmod +x {gadget_script}", shell=True)
-
-            if on_output:
-                on_output(f"[+] Perfil {modo.upper()} generado correctamente.")
-
-        return True
+        mensaje = f"[!] No se pudo aplicar el perfil '{key}'. Revise la consola."
+        log(mensaje)
+        return {"ok": False, "mode": "error", "message": mensaje}

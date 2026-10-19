@@ -84,60 +84,38 @@ instalar_dependencias() {
     sleep 2
 }
 
-# 2. Configurar USB Gadget (Rubber Ducky)
+# 2. Configurar USB Gadget compuesto (Rubber Ducky / Poison)
 configurar_gadget() {
-    print_center "[*] Creando script USB Gadget (/usr/local/bin/usb_gadget.sh)..." "${RED}"
-    
-    cat << 'EOF' > /usr/local/bin/usb_gadget.sh
+    print_center "[*] Instalando motor de Gadget USB compuesto..." "${RED}"
+
+    cat << EOF > /usr/local/bin/usb_gadget.sh
 #!/bin/bash
-# Limpiar cualquier gadget anterior
-if [ -d /sys/kernel/config/usb_gadget/g1 ]; then
-    echo "" > /sys/kernel/config/usb_gadget/g1/UDC 2>/dev/null
-    sleep 1
-    rm -rf /sys/kernel/config/usb_gadget/g1
-fi
-
-# Cargar módulos (por si no estaban)
-modprobe libcomposite
-modprobe usb_f_hid
-
-# Crear gadget
-mkdir -p /sys/kernel/config/usb_gadget/g1
-cd /sys/kernel/config/usb_gadget/g1
-
-echo 0x1d6b > idVendor
-echo 0x0104 > idProduct
-echo 0x0100 > bcdDevice
-echo 0x0200 > bcdUSB
-
-mkdir -p strings/0x409
-echo "1234567890" > strings/0x409/serialnumber
-echo "Raspberry Pi" > strings/0x409/manufacturer
-echo "Pi Zero HID Keyboard" > strings/0x409/product
-
-mkdir -p configs/c.1/strings/0x409
-echo "Teclado HID" > configs/c.1/strings/0x409/configuration
-echo 500 > configs/c.1/MaxPower
-
-mkdir -p functions/hid.usb0
-echo 1 > functions/hid.usb0/protocol
-echo 1 > functions/hid.usb0/subclass
-echo 8 > functions/hid.usb0/report_length
-printf "\x05\x01\x09\x06\xa1\x01\x05\x07\x19\xe0\x29\xe7\x15\x00\x25\x01\x75\x01\x95\x08\x81\x02\x95\x01\x75\x08\x81\x03\x95\x06\x75\x08\x15\x00\x25\x65\x05\x07\x19\x00\x29\x65\x81\x00\xc0" > functions/hid.usb0/report_desc
-
-ln -s functions/hid.usb0 configs/c.1/
-
-# Pequeña pausa para que el sistema USB esté listo
-sleep 2
-
-# Activar
-UDC_DEV=$(ls /sys/class/udc | head -1)
-echo "$UDC_DEV" > UDC
-echo "Gadget HID activado en $UDC_DEV"
+# DragonFly System - Construccion del gadget USB al arranque (generado por el instalador)
+set -u
+cd "$PROJECT_DIR" || exit 1
+exec /usr/bin/python3 -m dragonfly.core.usb_gadget boot
 EOF
-
     chmod +x /usr/local/bin/usb_gadget.sh
-    print_center "[+] Script USB Gadget configurado." "${GREEN}"
+
+    cat << 'EOF' > /etc/systemd/system/usb_gadget.service
+[Unit]
+Description=DragonFly USB Gadget (perfil persistente)
+After=systemd-modules-load.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /usr/local/bin/usb_gadget.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=sysinit.target
+EOF
+    systemctl daemon-reload
+
+    mkdir -p /etc/dragonfly
+    [ -f /etc/dragonfly/gadget_profile ] || echo "hid" > /etc/dragonfly/gadget_profile
+
+    print_center "[+] Motor de gadget instalado. Los perfiles se conmutan desde la app (en caliente)." "${GREEN}"
     sleep 2
 }
 
@@ -250,11 +228,20 @@ eliminar_instalacion() {
         rm -f /usr/local/bin/usb_gadget.sh
         print_center "[-] Script de USB Gadget eliminado." "${DARK_GRAY}"
     fi
-    if [ -d /sys/kernel/config/usb_gadget/g1 ]; then
-        echo "" > /sys/kernel/config/usb_gadget/g1/UDC 2>/dev/null
-        sleep 1
-        rm -rf /sys/kernel/config/usb_gadget/g1
+    for GADGET_DIR in /sys/kernel/config/usb_gadget/g1 /sys/kernel/config/usb_gadget/dragonfly; do
+        if [ -d "$GADGET_DIR" ]; then
+            echo "" > "$GADGET_DIR/UDC" 2>/dev/null
+            sleep 1
+            rm -rf "$GADGET_DIR"
+        fi
+    done
+    if [ -f /etc/systemd/system/usb_gadget.service ]; then
+        systemctl disable usb_gadget.service 2>/dev/null
+        rm -f /etc/systemd/system/usb_gadget.service
+        systemctl daemon-reload
+        print_center "[-] Servicio usb_gadget eliminado." "${DARK_GRAY}"
     fi
+    rm -f /etc/dragonfly/gadget_profile
 
     # 5.3 Limpiar Kiosco y configuraciones X11
     rm -f "$TARGET_HOME/.xinitrc"
