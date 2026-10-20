@@ -1,0 +1,4 @@
+# Dependencias para DragonFly System - Red Team Toolbox
+customtkinter>=5.2.0
+pyserial>=3.5
+Pillow>=9.0.0

@@ -123,13 +123,14 @@ Cada operación baja la interfaz, aplica el cambio con `macchanger` y la vuelve 
 
 #### 3. Auditoría WiFi
 
-Módulo central de auditoría inalámbrica. Agrupa cinco flujos de ataque/análisis:
+Módulo central de auditoría inalámbrica. Agrupa seis flujos de ataque/análisis:
 
+- **Reconocimiento WiFi (WiFi Audit 2.0 v1)**: escaneo pasivo single-band o dual-band con una o dos interfaces. Registra SSID, BSSID, canal, banda, señal en dBm y porcentaje, seguridad/cifrado/autenticación, beacons, data/IV, clientes observados por red, fabricante del AP por OUI y un score heurístico de honeypot con motivos. No inyecta tráfico ni identifica el ISP real (solo es posible con conexión/autorización). Los reportes se guardan en `Resultados_Auditoria/Auditoria-{timestamp}/` como `redes.json`, `redes.csv` y `reporte.txt`, y se pueden consultar desde “Explorar Auditorías WiFi”. En dual-band se requieren dos radios con `phy` distintos (por ejemplo, Wi-Fi onboard 2.4 GHz + adaptador USB 5 GHz).
 - **Activar Monitor**: pone la interfaz seleccionada en modo monitor usando `airmon-ng`, terminando procesos conflictivos antes.
 - **Captura Handshake**: escanea redes disponibles durante 15 segundos, permite seleccionar el objetivo y un cliente (o broadcast), y lanza `airodump-ng` para captura simultánea con `aireplay-ng -0` para forzar la reautenticación. Los archivos `.cap` se guardan en `Resultados_Handshake/Auditoria-{timestamp}/`.
 - **Ataque Evil Twin**: flujo completo de AP falso con portal cautivo (ver sección dedicada más adelante).
 - **Desautenticación**: envía paquetes deauth dirigidos a un cliente o en broadcast contra un BSSID objetivo.
-- **Explorar Handshakes / Explorar Evil Twin**: navegador de archivos integrado para revisar capturas y credenciales de sesiones anteriores.
+- **Explorar Handshakes / Explorar Evil Twin / Explorar Auditorías WiFi**: navegador de archivos integrado para revisar capturas, credenciales y reportes de reconocimiento de sesiones anteriores.
 
 #### 4. Gadget NRF24 JAMMER
 
@@ -144,18 +145,20 @@ Ejecuta scripts de inyección de pulsaciones a través del dispositivo HID USB c
 Módulo diseñado para interceptar tráfico emulando un adaptador Ethernet sobre USB (ataque estilo PoisonTap). Para utilizarlo, la Raspberry Pi debe estar configurada previamente en el modo de red adecuado desde el menú de Utilidades OS (RNDIS para víctimas Windows o CDC ECM para Mac/Linux). 
 
 La interfaz permite gestionar el ciclo de vida del ataque subyacente (ejecutado a través de `poison_logic.py`):
-- **Lanzar Ataque**: Inicia la instancia de envenenamiento en la interfaz `usb0`, delegando la manipulación de red y captura de tráfico a la lógica del backend.
-- **Detener Ataque**: Finaliza los procesos de intercepción de manera segura, limpia las reglas de red y guarda la sesión.
+- **Lanzar Ataque**: Reconstruye el perfil USB de red activo (ECM/RNDIS) para limpiar los endpoints del controlador dwc2, levanta `usb0` inmediatamente y arranca DHCP + Responder. Es imprescindible no bajar/subir `usb0` a mano: en víctimas Linux ese ciclo deja el endpoint OUT trabado (`NETDEV WATCHDOG`). Si el perfil activo no incluye red, el ataque se rechaza con un aviso para que se seleccione uno de los perfiles Poison.
+- **Detener Ataque**: Finaliza los procesos de intercepción de manera segura, limpia las reglas de red, restaura los servicios del sistema que se habían detenido y guarda la sesión.
 - **Explorar Logs**: Abre el navegador de archivos integrado apuntando a `Resultados_Poison/`, permitiendo revisar las carpetas de sesión (generadas con marca temporal) y leer directamente los registros capturados desde la interfaz táctil.
 
 #### 7. Utilidades OS
 
 Conjunto de herramientas de soporte operacional, ampliado para gestionar los nuevos perfiles de hardware y conexiones de red de forma nativa:
 
-- **Cambio de Perfil USB**: Permite reconfigurar el puerto OTG de la Pi Zero con reinicio controlado. Opciones disponibles:
-  - **Modo Host**: Para conectar antenas Wi-Fi externas o periféricos.
+- **Cambio de Perfil USB (Gadget Compuesto)**: Reconfigura el puerto OTG de la Pi Zero. Los perfiles gadget se construyen y conmutan **en caliente, sin reiniciar**, y pueden combinar funciones:
+  - **Modo Host**: Para conectar antenas Wi-Fi externas o periféricos (único caso que requiere reinicio).
   - **Rubber Ducky (HID)**: Emula un teclado USB.
-  - **Poison (Red USB)**: Despliega un submenú para elegir entre el perfil de red para **Windows (RNDIS)** o **Mac/Linux (CDC ECM)**.
+  - **Poison Windows (RNDIS)** / **Poison Mac/Linux (CDC ECM)**: Emula un adaptador de red USB.
+  - **Ducky + Poison (HID+RNDIS / HID+ECM)**: Teclado y red simultáneos en un solo gadget.
+  El perfil activo se persiste y se reconstruye automáticamente en cada arranque mediante `usb_gadget.service`.
 - **Gestor de Redes Wi-Fi**: Escaneo de redes, conexión táctil (con teclado alfanumérico emergente) y gestión de redes previamente guardadas mediante `nmcli`.
 - **Gestor Bluetooth**: Escaneo, emparejamiento y conexión a dispositivos Bluetooth directamente desde la GUI utilizando `bluetoothctl`.
 - **Sistema**: Monitoreo de almacenamiento, RAM, uso de CPU, conexiones activas, actualización del sistema (APT) y opciones de energía (Reiniciar/Apagar).
@@ -166,13 +169,14 @@ Conjunto de herramientas de soporte operacional, ampliado para gestionar los nue
 
 ### Gestión de Archivos y Sesiones
 
-El script crea y mantiene tres directorios raíz en la misma ubicación desde donde se ejecuta:
+El script crea y mantiene varios directorios raíz en la misma ubicación desde donde se ejecuta:
 
 
 | Directorio | Contenido |
 |---|---|
 | `Resultados_Nmap/` | Carpetas de sesión con archivos `.txt` de salida de Nmap |
 | `Resultados_Handshake/` | Capturas `.cap` de handshakes WPA/WPA2 |
+| `Resultados_Auditoria/` | Reportes JSON/CSV/TXT del reconocimiento WiFi pasivo |
 | `Resultados_EvilTwin/` | Archivos `credentials.log` con datos capturados por el portal |
 
 
@@ -256,18 +260,26 @@ ENTER
 ```
 
 ---
-### Cambio de Interfaz USB: Host, HID y Red (Poison)
+### Cambio de Interfaz USB: Gadget Compuesto (Host, HID y Red)
 
-La Pi Zero 2 W dispone de un único puerto USB OTG. La suite aprovecha el framework `libcomposite` y el subsistema `configfs` del kernel para reescribir dinámicamente los descriptores USB, permitiendo que la placa asuma diferentes identidades ante el ordenador víctima. Modificar este comportamiento requiere un reinicio completo del sistema, proceso que la GUI automatiza.
+La Pi Zero 2 W dispone de un único puerto USB OTG. La suite aprovecha el framework `libcomposite` y el subsistema `configfs` del kernel para reescribir dinámicamente los descriptores USB, permitiendo que la placa asuma diferentes identidades ante el ordenador víctima.
 
-Los perfiles disponibles desde el menú "Utilidades OS" son:
+El motor `dragonfly/core/usb_gadget.py` construye, destruye y **conmuta las funciones del gadget en caliente, sin reiniciar**, mientras el puerto esté en modo periférico. Cada conmutación tarda unos segundos y el host ve una desconexión/reconexión USB. El único cambio que exige reinicio es alternar entre **host** y **periférico**, porque `dr_mode` se fija en `/boot/firmware/config.txt` al arrancar.
 
-- **Modo Host (`dr_mode=host`)**: La Pi actúa como controladora, habilitando el uso de tarjetas de red inalámbricas externas o hubs USB.
-- **Modo Gadget HID (Rubber Ducky)**: Emula un teclado USB genérico (`idVendor=0x1d6b`, `idProduct=0x0104`). Habilita el dispositivo `/dev/hidg0` para la inyección de pulsaciones del módulo Ducky.
-- **Modo Gadget de Red RNDIS (Poison - Windows)**: Emula un adaptador de red compatible con el protocolo NDIS remoto de Microsoft (`idVendor=0x0525`, `idProduct=0xa4a2`). Presenta al host víctima un dispositivo "DragonFly RNDIS Ethernet".
-- **Modo Gadget de Red CDC ECM (Poison - Mac/Linux)**: Emula un adaptador de red estándar CDC ECM (`idVendor=0x0525`, `idProduct=0xa4a1`). El script de generación (`usb_gadget.sh`) está programado para asignar una **dirección MAC aleatoria** (`HOST_MAC`) en cada inicialización. Esto es una contramedida crítica para evitar que gestores de red estrictos (como NetworkManager en distribuciones Linux modernas) bloqueen o ignoren la interfaz tras múltiples conexiones.
+Perfiles disponibles desde el menú "Utilidades OS" (los gadget se aplican al instante):
 
-*Nota técnica: Al seleccionar un perfil de Gadget, la aplicación genera dinámicamente el script `/usr/local/bin/usb_gadget.sh` con los descriptores precisos, lo enlaza mediante un servicio `systemd` (`usb_gadget.service`) de ejecución única (oneshot) y reconfigura las superposiciones del kernel en `/boot/firmware/config.txt` antes de reiniciar.*
+- **Modo Host (`dr_mode=host`)**: La Pi actúa como controladora, habilitando el uso de tarjetas de red inalámbricas externas o hubs USB. Requiere reinicio.
+- **Rubber Ducky (HID)**: Emula un teclado USB genérico (`idVendor=0x1d6b`, `idProduct=0x0104`). Habilita el dispositivo `/dev/hidg0` para la inyección de pulsaciones del módulo Ducky.
+- **Poison Windows (RNDIS)**: Emula un adaptador de red compatible con el protocolo NDIS remoto de Microsoft (`idVendor=0x0525`, `idProduct=0xa4a2`) con los descriptores Microsoft OS necesarios para la asociación automática del driver en Windows.
+- **Poison Mac/Linux (CDC ECM)**: Emula un adaptador de red estándar CDC ECM (`idVendor=0x0525`, `idProduct=0xa4a1`). Se asigna una **dirección MAC aleatoria** (`host_addr`) en cada inicialización. Esto es una contramedida crítica para evitar que gestores de red estrictos (como NetworkManager en distribuciones Linux modernas) bloqueen o ignoren la interfaz tras múltiples conexiones.
+- **Ducky + Poison Windows (HID+RNDIS)** / **Ducky + Poison Linux (HID+ECM)**: teclado y red simultáneos sobre un mismo gadget compuesto (base para el control remoto y la exfiltración).
+
+*Nota técnica: el perfil elegido se persiste en `/etc/dragonfly/gadget_profile` y se reconstruye automáticamente en cada arranque mediante `/usr/local/bin/usb_gadget.sh` y el servicio `usb_gadget.service` (oneshot). La administración manual también está disponible por CLI:*
+
+```bash
+sudo python3 -m dragonfly.core.usb_gadget status
+sudo python3 -m dragonfly.core.usb_gadget apply hid_rndis
+```
 
 ---
 
@@ -652,7 +664,7 @@ cd /opt/dragonfly_desktop
 python3 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip
-pip install customtkinter
+pip install customtkinter pyserial
 ```
 
 El uso de un `venv` dedicado ofrece tres ventajas críticas en el contexto de un escritorio de auditoría:

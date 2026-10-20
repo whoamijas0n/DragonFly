@@ -7,7 +7,7 @@ import os
 
 class BLEGadget:
     """Encapsula la conexión serie con el gadget BLE (ESP32). Soporta reconexión segura y hot-plugging."""
-    _CANDIDATE_PATTERNS = ['/dev/ttyACM*', '/dev/ttyUSB*']
+    _CANDIDATE_PATTERNS = ['/dev/ttyUSB*', '/dev/ttyACM*']
 
     def __init__(self, baudrate=115200, timeout=2):
         self.baudrate = baudrate
@@ -26,103 +26,149 @@ class BLEGadget:
         if self._ser:
             try:
                 self._ser.close()
-            except:
+            except Exception:
                 pass
             self._ser = None
 
+    def _auto_detect_port(self, retries=4, delay=0.35):
+        """
+        Escanea puertos serie con reintentos para tolerar el retardo de enumeración
+        del kernel (udev) cuando el ESP32 se conecta en caliente.
+        """
+        candidate_hints = [
+            'cp210', 'ch340', 'ch341', 'ch910', 'usb2.0-serial', 'usb serial',
+            'usb uart', 'ft232', 'ftdi', 'espressif', 'esp32', 'single serial',
+            'cdc'
+        ]
+
+        for attempt in range(retries):
+            # 1. Búsqueda por descriptores USB mediante comports()
+            try:
+                ports = list(serial.tools.list_ports.comports())
+                for p in ports:
+                    desc = f"{p.description or ''} {p.manufacturer or ''}".lower()
+                    if any(hint in desc for hint in candidate_hints):
+                        if os.path.exists(p.device):
+                            return p.device
+            except Exception:
+                pass
+
+            # 2. Búsqueda directa por patrones en /dev/
+            for pattern in self._CANDIDATE_PATTERNS:
+                candidates = sorted(glob.glob(pattern))
+                for cand in candidates:
+                    if os.path.exists(cand):
+                        return cand
+
+            if attempt < retries - 1:
+                time.sleep(delay)
+
+        return None
+
     def connect(self):
-        """Intenta abrir el puerto y sincronizar con el ESP32 (Soporte Hot-Plug)."""
-        self._handle_disconnect() # Asegurar limpieza previa
-        self._port = self._auto_detect_port()
+        """
+        Abre el puerto y sincroniza con el firmware (soporte hot-plug).
+
+        Nota de oro: NO se declara "listo" por texto de arranque del ESP32
+        (spam del bootloader, mensajes de radios o pretty-details). El pulso
+        DTR/RTS al abrir el puerto reinicia el chip (~2.5-4.5 s de boot), por
+        lo que la única prueba válida de vida es una respuesta real a STATUS.
+        """
+        self._handle_disconnect() # Limpieza previa garantizada
+        self._port = self._auto_detect_port(retries=4, delay=0.35)
         if not self._port:
             return False
 
         try:
-            # Usamos configuración desglosada para manipular DTR/RTS antes de abrir
             self._ser = serial.Serial()
             self._ser.port = self._port
             self._ser.baudrate = self.baudrate
-            self._ser.timeout = 1
+            self._ser.timeout = 0.2  # Timeout corto no bloqueante para sondeo continuo
             self._ser.write_timeout = 1
-            
-            # PREVENCIÓN DE BUG ESP32:
-            # Deshabilitar DTR y RTS evita que el ESP32 se reinicie físicamente
-            # al abrir el puerto en Linux. Esto permite conectarlo en cualquier momento.
+
             self._ser.dtr = False
             self._ser.rts = False
-            
-            self._ser.open()
-            
-            # Dar un breve tiempo al OS para asignar el canal real
-            time.sleep(0.3)
-            self._ser.reset_input_buffer()
-            self._ser.reset_output_buffer()
 
-            start = time.time()
-            ready = False
-            
-            # Forzamos una solicitud de estado por si el ESP32 ya estaba encendido
-            # (No enviará "Gadget listo" de booteo si ya arrancó antes)
+            self._ser.open()
+
+            # Estabilización breve del canal UART tras apertura
+            time.sleep(0.2)
             try:
-                self._ser.write(b"STATUS\n")
-                self._ser.flush()
-            except:
+                self._ser.reset_input_buffer()
+                self._ser.reset_output_buffer()
+            except Exception:
                 pass
 
-            while time.time() - start < 3.0:
-                try:
-                    line = self._ser.readline().decode(errors='ignore').strip()
-                    # Si vemos la señal de arranque o un estado válido, marcamos ready
-                    if "Gadget listo" in line or "IDLE" in line or "JAM" in line:
-                        ready = True
-                        break
-                    # Alternativa: cualquier respuesta limpia y sustancial
-                    elif len(line) > 2 and "ERROR" not in line and "STATUS" not in line:
-                        ready = True
-                        break
-                except Exception:
-                    break
-                time.sleep(0.05)
-
-            if not ready:
-                # Intento final de reanimación si la lectura previa chocó
-                try:
-                    self._ser.write(b"STATUS\n")
-                    self._ser.flush()
-                    resp = self._ser.readline().decode(errors='ignore').strip()
-                    if "ERROR" not in resp and len(resp) > 2:
-                        ready = True
-                except:
-                    pass
-
-            if ready:
-                self._ser.timeout = self.timeout
-                self._ser.reset_input_buffer()
-                self._available = True
-                return True
-            else:
+            if not self._sync_with_firmware(window=7.0):
                 self._handle_disconnect()
                 return False
 
-        except Exception as e:
+            self._ser.timeout = self.timeout
+            try:
+                self._ser.reset_input_buffer()
+            except Exception:
+                pass
+            self._available = True
+            return True
+
+        except Exception:
             self._handle_disconnect()
             return False
+
+    def _sync_with_firmware(self, window=7.0) -> bool:
+        """
+        Ventana de sincronización estricta con el ESP32.
+
+        Consulta STATUS cada 400 ms e ignora TODO el spam de arranque
+        (ROM, 'VSPI/HSPI Started', printPrettyDetails, errores no fatales).
+        Solo aprueba como listo:
+          1. Una respuesta real 'JAMMING_*' (el firmware está en loop()).
+          2. 'Gadget listo' confirmado con un round-trip STATUS inmediato.
+        La ventana cubre el reinicio del ESP32 provocado por el pulso
+        DTR/RTS al abrir el puerto por primera vez.
+        """
+        start = time.time()
+        last_status_time = 0
+        listo_candidato = False
+
+        while time.time() - start < window:
+            now = time.time()
+
+            # Emitir consulta STATUS periódicamente (o inmediata tras 'Gadget listo')
+            if listo_candidato or (now - last_status_time >= 0.4):
+                try:
+                    self._ser.write(b"STATUS\n")
+                    self._ser.flush()
+                except Exception:
+                    return False
+                last_status_time = now
+                listo_candidato = False
+
+            try:
+                line = self._ser.readline().decode(errors='ignore').strip()
+            except Exception:
+                return False
+
+            if not line:
+                continue
+
+            # 1. Respuesta real del firmware: prueba de vida y de loop()
+            if line.startswith("JAMMING_"):
+                return True
+
+            # 2. Fin de setup(): candidato, pero exige verificación real
+            if "Gadget listo" in line:
+                listo_candidato = True
+                continue
+
+            # 3. Cualquier otra línea (spam de arranque, ERROR no fatal):
+            #    ignorada a propósito; seguimos esperando una prueba real.
+
+        return False
 
     def reconnect(self):
         """Cierra conexión actual e intenta reconectar."""
         return self.connect()
-
-    def _auto_detect_port(self):
-        ports = list(serial.tools.list_ports.comports())
-        for p in ports:
-            if any(hint in p.description for hint in ['CP210', 'CH340', 'USB2.0-Serial', 'USB Serial']):
-                if os.path.exists(p.device): # Doble verificación física
-                    return p.device
-        for pattern in self._CANDIDATE_PATTERNS:
-            candidates = glob.glob(pattern)
-            if candidates and os.path.exists(candidates[0]):
-                return candidates[0]
-        return None
 
     def is_available(self) -> bool:
         """Verifica el estado del objeto y la existencia física del dispositivo."""
@@ -136,6 +182,16 @@ class BLEGadget:
             return True
         except:
             return False
+
+    @property
+    def is_connected(self) -> bool:
+        """Alias compatible para is_available."""
+        return self.is_available()
+
+    @property
+    def port(self) -> str:
+        """Retorna el puerto serie asignado al dispositivo."""
+        return self._port
 
     def _send_command(self, cmd: str):
         if not self.is_available():
@@ -157,6 +213,15 @@ class BLEGadget:
             return ""
         return line
 
+    def _flush_input(self):
+        """Descarta lecturas residuales (spam de arranque, respuestas viejas)."""
+        if not self.is_available():
+            return
+        try:
+            self._ser.reset_input_buffer()
+        except Exception:
+            pass
+
     def _wait_for_ack(self, expected_prefix, timeout_secs=5):
         start = time.time()
         while time.time() - start < timeout_secs:
@@ -165,12 +230,57 @@ class BLEGadget:
                 return True
         return False
 
-    def sweep_jam(self, module: int, duration_sec: int):
-        try:
-            self._send_command(f"SWEEP_JAM {module} {duration_sec}")
-            return self._wait_for_ack("JAMMING_STARTED", 3)
-        except RuntimeError:
+    def ping(self, timeout_secs=1.5) -> bool:
+        """
+        Round-trip STATUS real: True solo si el firmware responde 'JAMMING_*'.
+        Verificación ligera de vida del enlace (para validar handles previos).
+        """
+        if not self.is_available():
             return False
+        try:
+            with self._lock:
+                self._ser.reset_input_buffer()
+                self._ser.timeout = 0.25
+                self._ser.write(b"STATUS\n")
+                self._ser.flush()
+            start = time.time()
+            while time.time() - start < timeout_secs:
+                try:
+                    line = self._ser.readline().decode(errors='ignore').strip()
+                except (serial.SerialException, OSError):
+                    self._handle_disconnect()
+                    return False
+                if line.startswith("JAMMING_"):
+                    return True
+            return False
+        except Exception:
+            self._handle_disconnect()
+            return False
+        finally:
+            try:
+                if self._ser and self._ser.is_open:
+                    self._ser.timeout = self.timeout
+            except Exception:
+                pass
+
+    def sweep_jam(self, module: int, duration_sec: int):
+        """
+        Envía SWEEP_JAM y espera el ACK 'JAMMING_STARTED'.
+
+        Reintenta una vez tras descartar residuos: cubre ACKs perdidos por
+        reinicios del ESP32 (picos de corriente al arrancar la RF/brownout)
+        o respuestas que quedaron en el búfer.
+        """
+        cmd = f"SWEEP_JAM {module} {duration_sec}"
+        for _ in range(2):
+            try:
+                self._flush_input()
+                self._send_command(cmd)
+            except RuntimeError:
+                return False
+            if self._wait_for_ack("JAMMING_STARTED", 3):
+                return True
+        return False
 
     def stop(self, module: int):
         try:
@@ -179,16 +289,23 @@ class BLEGadget:
                 self._stop_events[module].set()
                 self._send_command(f"STOP {module}")
             else:
+                self._flush_input()
                 self._send_command(f"STOP {module}")
                 return self._wait_for_ack("STOPPED", 2)
         except RuntimeError:
             pass
 
     def status(self) -> str:
+        """Consulta STATUS esperando una respuesta 'JAMMING_*' real."""
         try:
+            self._flush_input()
             self._send_command("STATUS")
-            line = self._read_line()
-            return line if line else "ERROR: sin respuesta"
+            start = time.time()
+            while time.time() - start < 2.0:
+                line = self._read_line()
+                if line.startswith("JAMMING_"):
+                    return line
+            return "ERROR: sin respuesta"
         except RuntimeError:
             return "ERROR: Gadget desconectado"
 

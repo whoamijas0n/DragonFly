@@ -257,7 +257,7 @@ void initVSPI() {
   sp = new SPIClass(VSPI);
   sp->begin();
   if (radio.begin(sp)) {
-    delay(1000);
+    delay(100);
     Serial.println("VSPI Started !!!");
     configureRadio(radio);
     radio.printPrettyDetails();
@@ -270,7 +270,7 @@ void initHSPI() {
   hp = new SPIClass(HSPI);
   hp->begin();
   if (radio1.begin(hp)) {
-    delay(1000);
+    delay(100);
     Serial.println("HSPI Started !!!");
     configureRadio(radio1);
     radio1.printPrettyDetails();

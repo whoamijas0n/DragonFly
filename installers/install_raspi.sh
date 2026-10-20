@@ -72,7 +72,7 @@ instalar_dependencias() {
     # Se incluyen openbox, fuentes de x11, fbdev para la pantalla TFT, netifaces, aioquic y git/openssl
     DEBIAN_FRONTEND=noninteractive apt-get install -y \
         python3 python3-tk python3-serial \
-        nmap macchanger aircrack-ng hostapd dnsmasq iptables \
+        nmap macchanger aircrack-ng iw ieee-data hostapd dnsmasq iptables \
         network-manager bluez rfkill \
         xserver-xorg xinit x11-xserver-utils \
         xserver-xorg-input-libinput xserver-xorg-input-evdev \
@@ -84,60 +84,38 @@ instalar_dependencias() {
     sleep 2
 }
 
-# 2. Configurar USB Gadget (Rubber Ducky)
+# 2. Configurar USB Gadget compuesto (Rubber Ducky / Poison)
 configurar_gadget() {
-    print_center "[*] Creando script USB Gadget (/usr/local/bin/usb_gadget.sh)..." "${RED}"
-    
-    cat << 'EOF' > /usr/local/bin/usb_gadget.sh
+    print_center "[*] Instalando motor de Gadget USB compuesto..." "${RED}"
+
+    cat << EOF > /usr/local/bin/usb_gadget.sh
 #!/bin/bash
-# Limpiar cualquier gadget anterior
-if [ -d /sys/kernel/config/usb_gadget/g1 ]; then
-    echo "" > /sys/kernel/config/usb_gadget/g1/UDC 2>/dev/null
-    sleep 1
-    rm -rf /sys/kernel/config/usb_gadget/g1
-fi
-
-# Cargar módulos (por si no estaban)
-modprobe libcomposite
-modprobe usb_f_hid
-
-# Crear gadget
-mkdir -p /sys/kernel/config/usb_gadget/g1
-cd /sys/kernel/config/usb_gadget/g1
-
-echo 0x1d6b > idVendor
-echo 0x0104 > idProduct
-echo 0x0100 > bcdDevice
-echo 0x0200 > bcdUSB
-
-mkdir -p strings/0x409
-echo "1234567890" > strings/0x409/serialnumber
-echo "Raspberry Pi" > strings/0x409/manufacturer
-echo "Pi Zero HID Keyboard" > strings/0x409/product
-
-mkdir -p configs/c.1/strings/0x409
-echo "Teclado HID" > configs/c.1/strings/0x409/configuration
-echo 500 > configs/c.1/MaxPower
-
-mkdir -p functions/hid.usb0
-echo 1 > functions/hid.usb0/protocol
-echo 1 > functions/hid.usb0/subclass
-echo 8 > functions/hid.usb0/report_length
-printf "\x05\x01\x09\x06\xa1\x01\x05\x07\x19\xe0\x29\xe7\x15\x00\x25\x01\x75\x01\x95\x08\x81\x02\x95\x01\x75\x08\x81\x03\x95\x06\x75\x08\x15\x00\x25\x65\x05\x07\x19\x00\x29\x65\x81\x00\xc0" > functions/hid.usb0/report_desc
-
-ln -s functions/hid.usb0 configs/c.1/
-
-# Pequeña pausa para que el sistema USB esté listo
-sleep 2
-
-# Activar
-UDC_DEV=$(ls /sys/class/udc | head -1)
-echo "$UDC_DEV" > UDC
-echo "Gadget HID activado en $UDC_DEV"
+# DragonFly System - Construccion del gadget USB al arranque (generado por el instalador)
+set -u
+cd "$PROJECT_DIR" || exit 1
+exec /usr/bin/python3 -m dragonfly.core.usb_gadget boot
 EOF
-
     chmod +x /usr/local/bin/usb_gadget.sh
-    print_center "[+] Script USB Gadget configurado." "${GREEN}"
+
+    cat << 'EOF' > /etc/systemd/system/usb_gadget.service
+[Unit]
+Description=DragonFly USB Gadget (perfil persistente)
+After=systemd-modules-load.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /usr/local/bin/usb_gadget.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=sysinit.target
+EOF
+    systemctl daemon-reload
+
+    mkdir -p /etc/dragonfly
+    [ -f /etc/dragonfly/gadget_profile ] || echo "hid" > /etc/dragonfly/gadget_profile
+
+    print_center "[+] Motor de gadget instalado. Los perfiles se conmutan desde la app (en caliente)." "${GREEN}"
     sleep 2
 }
 
@@ -165,17 +143,152 @@ EOF
     chmod +x "$TARGET_HOME/.xinitrc"
 
     # 3.2. Crear archivo de configuración para TFT Screen fbdev
+    # El driver fbdev de X solo acepta rutas /dev/fbN que correspondan a un
+    # framebuffer real en /sys/class/graphics/fbN, y ese número puede variar
+    # entre arranques (fb0 o fb1). Se detecta el actual y df-tft-recover.sh
+    # se encarga de corregirlo en cada boot.
     print_center "[*] Configurando framebuffer para pantalla TFT..." "${RED}"
     mkdir -p /usr/share/X11/xorg.conf.d/
-    cat << 'EOF' > /usr/share/X11/xorg.conf.d/99-fbdev.conf
+    TFT_FB=""
+    for _fbdir in /sys/class/graphics/fb[0-9]*; do
+        [ -e "$_fbdir/name" ] || continue
+        if [ "$(head -c 10 "$_fbdir/name" 2>/dev/null)" = "fb_ili9340" ]; then
+            TFT_FB=$(basename "$_fbdir")
+        fi
+    done
+    cat << EOF > /usr/share/X11/xorg.conf.d/99-fbdev.conf
 Section "Device"
     Identifier "TFT Screen"
     Driver "fbdev"
-    Option "fbdev" "/dev/fb1"
+    Option "fbdev" "/dev/${TFT_FB:-fb1}"
 EndSection
 EOF
 
-    # 3.3. Configurar autologin en consola usando raspi-config
+    # 3.3. Recuperación automática del framebuffer del TFT (script + servicio)
+    print_center "[*] Instalando recuperación automática del TFT..." "${RED}"
+    cat << 'EOF' > /usr/local/bin/df-tft-recover.sh
+#!/bin/bash
+# DragonFly - Asegura el framebuffer del TFT y la config de X (fbdev).
+#
+# El driver fbdev de X solo acepta rutas /dev/fbN que correspondan a un
+# framebuffer real en /sys/class/graphics/fbN (comprueba el basename contra
+# sysfs), asi que el numero debe ser el correcto en cada arranque: el kernel
+# puede registrar el TFT como fb0 o fb1 segun el timing del boot.
+#
+# Este script:
+#   1) localiza el framebuffer del TFT (nombre "fb_ili9340")
+#   2) si no existe, recarga el driver fbtft (el overlay tft9341 hace reset)
+#   3) ajusta /usr/share/X11/xorg.conf.d/99-fbdev.conf a /dev/fbN
+# Se ejecuta al arranque antes del kiosco (df-tft-recover.service) y tambien
+# antes de startx desde ~/.profile.
+set -u
+
+CONF=/usr/share/X11/xorg.conf.d/99-fbdev.conf
+READY=/run/df-display-ready
+
+log() {
+    echo "df-tft-recover: $*" >&2
+    timeout 3 logger -t df-tft-recover "$*" 2>/dev/null || true
+}
+
+tft_fb() {
+    local f
+    for f in /sys/class/graphics/fb[0-9]*; do
+        [ -e "$f/name" ] || continue
+        if [ "$(timeout 2 head -c 10 "$f/name" 2>/dev/null)" = "fb_ili9340" ]; then
+            basename "$f"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Asegura el arranque del kiosco en ~/.profile: un corte de luz puede dejar
+# el fichero vacio (escritura perdida) y entonces startx no se dispararia.
+PROF=/home/raspi/.profile
+if ! grep -q "Iniciar entorno grafico para DragonFly" "$PROF" 2>/dev/null; then
+    cat >> "$PROF" <<'EOF3'
+
+# Iniciar entorno grafico para DragonFly automaticamente
+if [[ -z $DISPLAY ]] && [[ $(tty) = /dev/tty1 ]]; then
+    sudo -n /usr/local/bin/df-tft-recover.sh >/dev/null 2>&1 || true
+    startx
+fi
+EOF3
+    chown --reference=/home/raspi "$PROF" 2>/dev/null || true
+    log "bloque de arranque re-insertado en $PROF"
+fi
+
+FB=$(tft_fb || true)
+
+# Margen inicial: tras el arranque el driver/udev pueden tardar unos segundos.
+if [ -z "${FB:-}" ]; then
+    for _ in $(seq 1 10); do
+        sleep 1
+        FB=$(tft_fb || true)
+        [ -n "${FB:-}" ] && break
+    done
+fi
+
+# Plan B: recargar el driver fbtft hasta 3 veces.
+if [ -z "${FB:-}" ]; then
+    for intento in 1 2 3; do
+        log "TFT no detectado; recargando driver fbtft (intento $intento)"
+        modprobe -r fb_ili9340 >/dev/null 2>&1 || true
+        sleep 1
+        modprobe -r fbtft >/dev/null 2>&1 || true
+        modprobe fb_ili9340 >/dev/null 2>&1 || true
+        for _ in $(seq 1 10); do
+            sleep 1
+            FB=$(tft_fb || true)
+            [ -n "${FB:-}" ] && break 2
+        done
+    done
+fi
+
+if [ -z "${FB:-}" ]; then
+    log "AVISO: no se pudo detectar el TFT (revisar hardware/overlay)"
+    exit 1
+fi
+
+N=${FB#fb}
+
+# Ajusta la config de Xorg al numero de framebuffer actual (primero el
+# fichero, despues el log: el log nunca debe impedir el arreglo).
+if ! grep -q "\"/dev/fb$N\"" "$CONF" 2>/dev/null; then
+    cat > "$CONF" <<EOF2
+Section "Device"
+    Identifier "TFT Screen"
+    Driver "fbdev"
+    Option "fbdev" "/dev/fb$N"
+EndSection
+EOF2
+    log "configurado Xorg -> /dev/fb$N"
+fi
+
+touch "$READY"
+exit 0
+EOF
+    chmod +x /usr/local/bin/df-tft-recover.sh
+
+    cat << 'EOF' > /etc/systemd/system/df-tft-recover.service
+[Unit]
+Description=DragonFly - Framebuffer del TFT y config de X (fbdev)
+After=systemd-udevd.service local-fs.target
+Before=getty@tty1.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/df-tft-recover.sh
+TimeoutStartSec=90
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+    systemctl enable df-tft-recover.service > /dev/null 2>&1
+
+    # 3.4. Configurar autologin en consola usando raspi-config
     print_center "[*] Activando autologin en tty1..." "${RED}"
     if command -v raspi-config >/dev/null 2>&1; then
         raspi-config nonint do_boot_behaviour B2
@@ -183,22 +296,25 @@ EOF
         echo -e "${DARK_GRAY}[!] raspi-config no encontrado. Omitiendo autologin.${NC}"
     fi
 
-    # 3.4. Disparar startx al inicio de sesión desde .profile
+    # 3.5. Disparar startx al inicio de sesión desde .profile
     PROFILE_FILE="$TARGET_HOME/.profile"
     if ! grep -q "startx" "$PROFILE_FILE" 2>/dev/null; then
         cat << 'EOF' >> "$PROFILE_FILE"
 
 # Iniciar entorno grafico para DragonFly automaticamente
 if [[ -z $DISPLAY ]] && [[ $(tty) = /dev/tty1 ]]; then
+    sudo -n /usr/local/bin/df-tft-recover.sh >/dev/null 2>&1 || true
     startx
 fi
 EOF
     fi
 
-    # 3.5. Otorgar permisos de ejecución
+    # 3.6. Otorgar permisos de ejecución
     print_center "[*] Otorgando permisos de ejecución NOPASSWD en sudoers..." "${RED}"
     echo "$TARGET_USER ALL=(ALL) NOPASSWD: /usr/bin/python3 $PROJECT_DIR/raspi.py" | tee /etc/sudoers.d/010_dragonfly > /dev/null
     chmod 0440 /etc/sudoers.d/010_dragonfly
+    echo "$TARGET_USER ALL=(ALL) NOPASSWD: /usr/local/bin/df-tft-recover.sh" | tee /etc/sudoers.d/020_dragonfly_display > /dev/null
+    chmod 0440 /etc/sudoers.d/020_dragonfly_display
 
     print_center "[+] Entorno de Kiosco y TFT configurado correctamente." "${GREEN}"
     sleep 2
@@ -250,15 +366,33 @@ eliminar_instalacion() {
         rm -f /usr/local/bin/usb_gadget.sh
         print_center "[-] Script de USB Gadget eliminado." "${DARK_GRAY}"
     fi
-    if [ -d /sys/kernel/config/usb_gadget/g1 ]; then
-        echo "" > /sys/kernel/config/usb_gadget/g1/UDC 2>/dev/null
-        sleep 1
-        rm -rf /sys/kernel/config/usb_gadget/g1
+    for GADGET_DIR in /sys/kernel/config/usb_gadget/g1 /sys/kernel/config/usb_gadget/dragonfly; do
+        if [ -d "$GADGET_DIR" ]; then
+            echo "" > "$GADGET_DIR/UDC" 2>/dev/null
+            sleep 1
+            rm -rf "$GADGET_DIR"
+        fi
+    done
+    if [ -f /etc/systemd/system/usb_gadget.service ]; then
+        systemctl disable usb_gadget.service 2>/dev/null
+        rm -f /etc/systemd/system/usb_gadget.service
+        systemctl daemon-reload
+        print_center "[-] Servicio usb_gadget eliminado." "${DARK_GRAY}"
     fi
+    rm -f /etc/dragonfly/gadget_profile
 
     # 5.3 Limpiar Kiosco y configuraciones X11
     rm -f "$TARGET_HOME/.xinitrc"
     rm -f /usr/share/X11/xorg.conf.d/99-fbdev.conf
+
+    # 5.3b Eliminar recuperación automática del TFT
+    if [ -f /etc/systemd/system/df-tft-recover.service ]; then
+        systemctl disable df-tft-recover.service 2>/dev/null
+        rm -f /etc/systemd/system/df-tft-recover.service
+        systemctl daemon-reload
+    fi
+    rm -f /usr/local/bin/df-tft-recover.sh
+    rm -f /run/df-display-ready
     
     # 5.4 Limpiar autostart de .profile
     PROFILE_FILE="$TARGET_HOME/.profile"
@@ -274,6 +408,7 @@ eliminar_instalacion() {
         rm -f /etc/sudoers.d/010_dragonfly
         print_center "[-] Excepciones de Sudoers removidas." "${DARK_GRAY}"
     fi
+    rm -f /etc/sudoers.d/020_dragonfly_display
 
     print_center "[+] SISTEMA LIMPIO." "${GREEN}"
     print_center "Nota: Las dependencias instaladas por APT se han mantenido para evitar romper otras utilidades del SO." "${WHITE}"
