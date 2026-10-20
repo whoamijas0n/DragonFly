@@ -144,8 +144,8 @@ Ejecuta scripts de inyección de pulsaciones a través del dispositivo HID USB c
 Módulo diseñado para interceptar tráfico emulando un adaptador Ethernet sobre USB (ataque estilo PoisonTap). Para utilizarlo, la Raspberry Pi debe estar configurada previamente en el modo de red adecuado desde el menú de Utilidades OS (RNDIS para víctimas Windows o CDC ECM para Mac/Linux). 
 
 La interfaz permite gestionar el ciclo de vida del ataque subyacente (ejecutado a través de `poison_logic.py`):
-- **Lanzar Ataque**: Inicia la instancia de envenenamiento en la interfaz `usb0`, delegando la manipulación de red y captura de tráfico a la lógica del backend.
-- **Detener Ataque**: Finaliza los procesos de intercepción de manera segura, limpia las reglas de red y guarda la sesión.
+- **Lanzar Ataque**: Reconstruye el perfil USB de red activo (ECM/RNDIS) para limpiar los endpoints del controlador dwc2, levanta `usb0` inmediatamente y arranca DHCP + Responder. Es imprescindible no bajar/subir `usb0` a mano: en víctimas Linux ese ciclo deja el endpoint OUT trabado (`NETDEV WATCHDOG`). Si el perfil activo no incluye red, el ataque se rechaza con un aviso para que se seleccione uno de los perfiles Poison.
+- **Detener Ataque**: Finaliza los procesos de intercepción de manera segura, limpia las reglas de red, restaura los servicios del sistema que se habían detenido y guarda la sesión.
 - **Explorar Logs**: Abre el navegador de archivos integrado apuntando a `Resultados_Poison/`, permitiendo revisar las carpetas de sesión (generadas con marca temporal) y leer directamente los registros capturados desde la interfaz táctil.
 
 #### 7. Utilidades OS

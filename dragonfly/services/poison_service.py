@@ -93,10 +93,14 @@ class PoisonService:
         if thread and thread.is_alive():
             thread.join(timeout=3)
 
-        # Matado de seguridad para procesos huérfanos que sigan escuchando
-        safe_run(["sudo", "pkill", "-f", "responder"],
+        # Matado de seguridad para procesos huérfanos que sigan escuchando.
+        # Solo se toca el dnsmasq de Poison: el servicio del sistema se detuvo
+        # y se restauró desde PoisonAttack._cleanup().
+        safe_run(["sudo", "pkill", "-f", "[Rr]esponder"],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        safe_run(["sudo", "pkill", "-f", "dnsmasq"],
+        safe_run(["sudo", "pkill", "-f", "dragonfly_poison_dnsmasq"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        safe_run(["sudo", "pkill", "-f", "dnsmasq_temp.conf"],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         self._attack_instance = None

@@ -399,6 +399,52 @@ def _bind_udc(log=None, retries: int = 3):
     raise RuntimeError(f"No se pudo enlazar el gadget al UDC {udcs[0]}: {ultimo_error}")
 
 
+def _bring_up_network_interfaces(log=None, timeout: float = 5.0) -> list:
+    """
+    Levanta las interfaces de red del gadget INMEDIATAMENTE tras enlazar el UDC.
+
+    Crítico en Linux: si ``usb0`` se queda abajo, el host ve el carrier caer a
+    los pocos segundos y NetworkManager cancela la transacción DHCP. Levantar
+    el enlace más tarde (por ejemplo, al pulsar "Lanzar Ataque Poison") vuelve
+    a generar un ciclo carrier-off/on que en dwc2 deja el endpoint OUT con
+    EPENA+EPDIS: el host transmite pero los URBs nunca completan y aparecen
+    NETDEV WATCHDOG. Por eso el enlace se sube aquí, antes de que el host
+    retire la interfaz y sin ciclos down/up posteriores.
+    """
+    log = _logger(log)
+    limite = time.monotonic() + timeout
+    interfaces = []
+
+    while time.monotonic() < limite:
+        interfaces = gadget_net_interfaces()
+        if interfaces:
+            break
+        time.sleep(0.1)
+
+    if not interfaces:
+        log("[!] El perfil no creó interfaces de red del gadget.")
+        return []
+
+    activas = []
+    for iface in interfaces:
+        try:
+            safe_run(
+                ["ip", "link", "set", iface, "up"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
+            activas.append(iface)
+        except Exception:
+            pass
+
+    if activas:
+        log(f"[+] Enlace de red del gadget activo: {', '.join(activas)}.")
+    else:
+        log("[!] No se pudieron levantar las interfaces de red del gadget.")
+    return activas
+
+
 def build(profile: str, log=None) -> bool:
     """Crea el gadget completo para el perfil indicado y lo enlaza al UDC."""
     log = _logger(log)
@@ -457,6 +503,11 @@ def build(profile: str, log=None) -> bool:
     time.sleep(2.0)
     _bind_udc(log)
     time.sleep(0.4)
+
+    # Los perfiles con red deben subir su interfaz ya: el host Linux solo
+    # inicia (y mantiene) el DHCP si el carrier no desaparece poco después.
+    if {"ecm", "rndis"} & set(meta["functions"]):
+        _bring_up_network_interfaces(log)
 
     log(f"[+] Gadget '{key}' activo en {os.path.basename(udc_controllers()[0])}.")
     return True
