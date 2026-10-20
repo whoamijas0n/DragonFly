@@ -3,6 +3,7 @@ dragonfly/ui/desktop/views/wifi_view.py - Vista integral de auditoría inalámbr
 Controla modo monitor, captura de Handshakes, Rogue AP Evil Twin y ataques Deauth.
 """
 
+import os
 import threading
 import customtkinter as ctk
 from dragonfly.ui.desktop.views.base_view import BaseView
@@ -13,10 +14,16 @@ from dragonfly.ui.desktop.theme import (
     COLOR_BOTON_PELIGRO_HOVER,
     COLOR_BOTON_GRIS,
     COLOR_BOTON_GRIS_HOVER,
-    COLOR_BOTON_DESHABILITADO
+    COLOR_BOTON_DESHABILITADO,
+    COLOR_TEXTO_TERMINAL,
 )
-from dragonfly.config import BASE_DIR_WIFI, BASE_DIR_EVIL, BASE_DIR_CLIENTS
+from dragonfly.config import BASE_DIR_WIFI, BASE_DIR_EVIL, BASE_DIR_CLIENTS, BASE_DIR_WIFI_AUDIT
 from dragonfly.core.hardware import get_wifi_interfaces
+from dragonfly.services.wifi_audit_service import (
+    format_network_detail,
+    format_network_line,
+    format_summary,
+)
 
 
 class WiFiView(BaseView):
@@ -67,13 +74,15 @@ class WiFiView(BaseView):
 
         # Acciones principales
         botones = [
+            ("Reconocimiento WiFi (Pasivo)", self._flow_audit_start, COLOR_BOTON_ROJO),
             ("Activar / Desactivar Modo Monitor", self._toggle_monitor_mode, COLOR_BOTON_ROJO),
             ("Captura de Handshake (WPA/WPA2)", self._flow_handshake_start, COLOR_BOTON_ROJO),
             ("Ataque Evil Twin (Portal Cautivo)", self._flow_evil_twin_start, COLOR_BOTON_PELIGRO),
             ("Ataque de Desautenticación (Deauth)", self._flow_deauth_start, COLOR_BOTON_ROJO),
             ("Explorar Handshakes Capturados", lambda: self.app.views['explorer'].show_sessions(BASE_DIR_WIFI, "Handshakes", self.render), COLOR_BOTON_GRIS),
             ("Explorar Credenciales Evil Twin", lambda: self.app.views['explorer'].show_sessions(BASE_DIR_EVIL, "Evil Twin", self.render), COLOR_BOTON_GRIS),
-            ("Explorar Clientes Conectados", lambda: self.app.views['explorer'].show_sessions(BASE_DIR_CLIENTS, "Clientes", self.render), COLOR_BOTON_GRIS)
+            ("Explorar Clientes Conectados", lambda: self.app.views['explorer'].show_sessions(BASE_DIR_CLIENTS, "Clientes", self.render), COLOR_BOTON_GRIS),
+            ("Explorar Auditorías WiFi", lambda: self.app.views['explorer'].show_sessions(BASE_DIR_WIFI_AUDIT, "Auditorías WiFi", self.render), COLOR_BOTON_GRIS)
         ]
 
         for texto, cmd, color in botones:
@@ -556,3 +565,383 @@ class WiFiView(BaseView):
         self.write_console("[*] Deteniendo inyección de paquetes deauth...")
         self.services.wifi.stop_deauth_attack()
         self.app.after(1000, self.render)
+
+    # -------------------------------------------------------------
+    # FLUJO: RECONOCIMIENTO WIFI PASIVO (WIFI AUDIT 2.0 - V1)
+    # -------------------------------------------------------------
+    def _ensure_audit_report_saved(self, force=False):
+        """Garantiza que el resultado actual exista en el directorio de auditorías."""
+        result = self.wifi_state.get("audit_result") or {}
+        networks = result.get("networks") or []
+        if not networks:
+            return result.get("session_dir", "")
+
+        session_dir = result.get("session_dir")
+        report_path = os.path.join(session_dir, "redes.json") if session_dir else ""
+        if not force and report_path and os.path.isfile(report_path):
+            return session_dir
+
+        session_dir = self.services.wifi_audit.save_report(
+            networks,
+            result.get("summary"),
+            session_dir=session_dir,
+        )
+        result["session_dir"] = session_dir
+        self.wifi_state["audit_result"] = result
+        return session_dir
+
+    def _flow_audit_finish(self):
+        """Detiene el escaneo, guarda lo obtenido y vuelve al menú WiFi principal."""
+        if self.wifi_state.get("audit_finishing"):
+            return
+        self.wifi_state["audit_finishing"] = True
+        self.wifi_state["audit_token"] = None
+        self.write_console("[*] Finalizando auditoría WiFi...")
+
+        try:
+            session_dir = self._ensure_audit_report_saved()
+            if session_dir:
+                self.write_console(f"[+] Resultados guardados en {session_dir}")
+        except Exception as exc:
+            self.write_console(f"[!] Error al guardar resultados: {exc}")
+
+        def cleanup():
+            try:
+                self.services.wifi_audit.cancel_scan()
+                if not self.services.wifi_audit.wait_for_idle(timeout=15):
+                    self.write_console("[!] El escaneo todavía se está deteniendo.")
+            except Exception as exc:
+                self.write_console(f"[!] Error al finalizar auditoría: {exc}")
+            finally:
+                self.run_on_ui(self._finish_audit_return)
+
+        threading.Thread(target=cleanup, daemon=True).start()
+
+    def _finish_audit_return(self):
+        self.wifi_state["audit_finishing"] = False
+        self.wifi_state["audit_result"] = {}
+        self.render()
+
+    def _flow_audit_start(self):
+        self.wifi_state["audit_token"] = None
+        interfaces = get_wifi_interfaces()
+        self.clear_frame()
+        self.add_back_button(self.render)
+        ctk.CTkLabel(
+            self.main_frame,
+            text="RECONOCIMIENTO WIFI PASIVO",
+            font=ctk.CTkFont(size=20, weight="bold")
+        ).pack(pady=(10, 5))
+        if not interfaces:
+            ctk.CTkLabel(
+                self.main_frame,
+                text="No se detectaron interfaces inalámbricas Wi-Fi.",
+                text_color="#ff4d4d"
+            ).pack(pady=20)
+            return
+
+        ctk.CTkButton(
+            self.main_frame,
+            text="Single-band (1 interfaz)",
+            fg_color=COLOR_BOTON_ROJO,
+            hover_color=COLOR_BOTON_HOVER,
+            width=350,
+            height=40,
+            command=lambda: self._flow_audit_single_setup(interfaces)
+        ).pack(pady=6)
+
+        ctk.CTkButton(
+            self.main_frame,
+            text="Dual-band (2 interfaces)",
+            fg_color=COLOR_BOTON_PELIGRO,
+            hover_color=COLOR_BOTON_PELIGRO_HOVER,
+            width=350,
+            height=40,
+            command=lambda: self._flow_audit_dual_setup(interfaces)
+        ).pack(pady=6)
+
+        self.show_console()
+
+    def _flow_audit_single_setup(self, interfaces):
+        self.clear_frame()
+        self.add_back_button(self._flow_audit_start)
+        ctk.CTkLabel(
+            self.main_frame,
+            text="RECONOCIMIENTO SINGLE-BAND",
+            font=ctk.CTkFont(size=18, weight="bold")
+        ).pack(pady=10)
+
+        ctk.CTkLabel(self.main_frame, text="Interfaz WiFi:").pack(pady=(8, 2))
+        iface_var = ctk.StringVar(value=interfaces[0])
+        ctk.CTkOptionMenu(
+            self.main_frame,
+            variable=iface_var,
+            values=interfaces,
+            fg_color=COLOR_BOTON_ROJO,
+            button_color=COLOR_BOTON_HOVER
+        ).pack(pady=5)
+
+        ctk.CTkLabel(self.main_frame, text="Banda:").pack(pady=(8, 2))
+        band_var = ctk.StringVar(value="Auto")
+        ctk.CTkOptionMenu(
+            self.main_frame,
+            variable=band_var,
+            values=["Auto", "2.4 GHz", "5 GHz"],
+            fg_color=COLOR_BOTON_ROJO,
+            button_color=COLOR_BOTON_HOVER
+        ).pack(pady=5)
+
+        def proceed():
+            band = {"2.4 GHz": "2.4", "5 GHz": "5", "Auto": None}.get(band_var.get())
+            self._flow_audit_scan(iface_var.get(), band=band)
+
+        ctk.CTkButton(
+            self.main_frame,
+            text="INICIAR ESCANEO (20s)",
+            fg_color=COLOR_BOTON_ROJO,
+            hover_color=COLOR_BOTON_HOVER,
+            width=300,
+            height=40,
+            command=proceed
+        ).pack(pady=20)
+
+        self.show_console()
+
+    def _flow_audit_dual_setup(self, interfaces):
+        if len(interfaces) < 2:
+            self.clear_frame()
+            self.add_back_button(self._flow_audit_start)
+            ctk.CTkLabel(
+                self.main_frame,
+                text="RECONOCIMIENTO DUAL-BAND",
+                font=ctk.CTkFont(size=18, weight="bold")
+            ).pack(pady=10)
+            ctk.CTkLabel(
+                self.main_frame,
+                text="Se requieren 2 interfaces WiFi independientes:\n"
+                     "1 para 2.4 GHz y 1 para 5 GHz.",
+                text_color="#ff4d4d",
+                justify="center"
+            ).pack(pady=20)
+            return
+
+        self.clear_frame()
+        self.add_back_button(self._flow_audit_start)
+        ctk.CTkLabel(
+            self.main_frame,
+            text="RECONOCIMIENTO DUAL-BAND",
+            font=ctk.CTkFont(size=18, weight="bold")
+        ).pack(pady=10)
+        ctk.CTkLabel(
+            self.main_frame,
+            text="Las dos interfaces deben usar phy distintos.",
+            text_color="#aaaaaa"
+        ).pack(pady=(0, 10))
+
+        ctk.CTkLabel(self.main_frame, text="Interfaz 2.4 GHz:").pack(pady=(5, 2))
+        iface_2g_var = ctk.StringVar(value=interfaces[0])
+        ctk.CTkOptionMenu(
+            self.main_frame,
+            variable=iface_2g_var,
+            values=interfaces,
+            fg_color=COLOR_BOTON_ROJO,
+            button_color=COLOR_BOTON_HOVER
+        ).pack(pady=5)
+
+        ctk.CTkLabel(self.main_frame, text="Interfaz 5 GHz:").pack(pady=(5, 2))
+        iface_5g_var = ctk.StringVar(value=interfaces[1])
+        ctk.CTkOptionMenu(
+            self.main_frame,
+            variable=iface_5g_var,
+            values=interfaces,
+            fg_color=COLOR_BOTON_ROJO,
+            button_color=COLOR_BOTON_HOVER
+        ).pack(pady=5)
+
+        error_label = ctk.CTkLabel(self.main_frame, text="", text_color="#ff4d4d")
+        error_label.pack(pady=5)
+
+        def proceed():
+            iface_2g = iface_2g_var.get()
+            iface_5g = iface_5g_var.get()
+            if iface_2g == iface_5g:
+                error_label.configure(text="Seleccione dos interfaces distintas.")
+                return
+            self._flow_audit_scan(iface_2g, band="2.4", iface_5g=iface_5g)
+
+        ctk.CTkButton(
+            self.main_frame,
+            text="INICIAR ESCANEO DUAL (20s)",
+            fg_color=COLOR_BOTON_PELIGRO,
+            hover_color=COLOR_BOTON_PELIGRO_HOVER,
+            width=300,
+            height=40,
+            command=proceed
+        ).pack(pady=20)
+
+        self.show_console()
+
+    def _flow_audit_scan(self, iface, band=None, iface_5g=None):
+        token = object()
+        self.wifi_state["audit_token"] = token
+        self.wifi_state["audit_result"] = {}
+        self.clear_frame()
+        self.add_back_button(self._flow_audit_start)
+        ctk.CTkLabel(
+            self.main_frame,
+            text="RECONOCIMIENTO WIFI EN CURSO",
+            font=ctk.CTkFont(size=18, weight="bold")
+        ).pack(pady=10)
+        ctk.CTkButton(
+            self.main_frame,
+            text="FINALIZAR AUDITORÍA",
+            fg_color=COLOR_BOTON_PELIGRO,
+            hover_color=COLOR_BOTON_PELIGRO_HOVER,
+            width=300,
+            height=40,
+            command=self._flow_audit_finish
+        ).pack(pady=(0, 10))
+        self.show_console()
+        self.write_console("[*] Iniciando escaneo pasivo...")
+
+        def worker():
+            try:
+                if iface_5g:
+                    result = self.services.wifi_audit.scan_dual(
+                        iface, iface_5g, duration=20, on_output=self.write_console
+                    )
+                else:
+                    result = self.services.wifi_audit.scan_single(
+                        iface, duration=20, band=band, on_output=self.write_console
+                    )
+                self.run_on_ui(
+                    lambda: self._flow_audit_show_networks(result)
+                    if self.wifi_state.get("audit_token") is token else None
+                )
+            except Exception as exc:
+                message = str(exc)
+                self.run_on_ui(
+                    lambda e=message: self._flow_audit_error(e)
+                    if self.wifi_state.get("audit_token") is token else None
+                )
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _flow_audit_show_networks(self, result):
+        result = result or {}
+        self.wifi_state["audit_result"] = result
+        redes = result.get("networks", [])
+        summary = result.get("summary", {})
+        session_dir = result.get("session_dir", "")
+
+        self.clear_frame()
+        self.add_back_button(self._flow_audit_start)
+        ctk.CTkLabel(
+            self.main_frame,
+            text=f"REDES DETECTADAS ({len(redes)})",
+            font=ctk.CTkFont(size=18, weight="bold")
+        ).pack(pady=10)
+        ctk.CTkLabel(
+            self.main_frame,
+            text=format_summary(summary),
+            text_color="#aaaaaa",
+            justify="center"
+        ).pack(pady=(0, 8))
+
+        ctk.CTkButton(
+            self.main_frame,
+            text="FINALIZAR AUDITORÍA",
+            fg_color=COLOR_BOTON_PELIGRO,
+            hover_color=COLOR_BOTON_PELIGRO_HOVER,
+            width=300,
+            height=40,
+            command=self._flow_audit_finish
+        ).pack(pady=(0, 8))
+
+        frame = ctk.CTkScrollableFrame(self.main_frame, height=300)
+        frame.pack(fill="both", expand=True, padx=20, pady=(0, 10))
+
+        if not redes:
+            ctk.CTkLabel(
+                frame,
+                text="No se detectaron redes en el rango.",
+                text_color="#aaaaaa"
+            ).pack(pady=20)
+        else:
+            for net in redes:
+                score = int(net.get("honeypot_score") or 0)
+                if score >= 50:
+                    color, hover = COLOR_BOTON_ROJO, COLOR_BOTON_HOVER
+                elif score >= 25:
+                    color, hover = COLOR_BOTON_PELIGRO, COLOR_BOTON_PELIGRO_HOVER
+                else:
+                    color, hover = COLOR_BOTON_GRIS, COLOR_BOTON_GRIS_HOVER
+
+                ctk.CTkButton(
+                    frame,
+                    text=format_network_line(net),
+                    fg_color=color,
+                    hover_color=hover,
+                    anchor="w",
+                    height=34,
+                    command=lambda n=net: self._flow_audit_detail(n)
+                ).pack(fill="x", pady=3)
+
+        self.show_console()
+        if session_dir:
+            self.write_console(f"[+] Reporte: {session_dir}")
+
+    def _flow_audit_detail(self, net):
+        try:
+            session_dir = self._ensure_audit_report_saved(force=True)
+        except Exception as exc:
+            session_dir = ""
+            self.write_console(f"[!] Error al guardar resultados: {exc}")
+
+        self.clear_frame()
+        self.add_back_button(
+            lambda: self._flow_audit_show_networks(self.wifi_state.get("audit_result", {}))
+        )
+        ctk.CTkLabel(
+            self.main_frame,
+            text=str(net.get("essid", "Detalle"))[:40],
+            font=ctk.CTkFont(size=18, weight="bold")
+        ).pack(pady=10)
+
+        if session_dir:
+            ctk.CTkLabel(
+                self.main_frame,
+                text=f"Guardado: {os.path.basename(session_dir)}",
+                text_color="#aaaaaa"
+            ).pack(pady=(0, 5))
+
+        textbox = ctk.CTkTextbox(
+            self.main_frame,
+            font=ctk.CTkFont(family="Courier", size=13),
+            fg_color="#0a0a0a",
+            text_color=COLOR_TEXTO_TERMINAL,
+            corner_radius=12,
+            height=400
+        )
+        textbox.pack(fill="both", expand=True, padx=20, pady=(0, 15))
+        textbox.insert("1.0", format_network_detail(net))
+        textbox.configure(state="disabled")
+
+    def _flow_audit_error(self, message):
+        self.clear_frame()
+        self.add_back_button(self._flow_audit_start)
+        ctk.CTkLabel(
+            self.main_frame,
+            text="ERROR DE RECONOCIMIENTO",
+            font=ctk.CTkFont(size=18, weight="bold"),
+            text_color=COLOR_BOTON_PELIGRO
+        ).pack(pady=10)
+        ctk.CTkLabel(
+            self.main_frame,
+            text=str(message),
+            text_color="#ff4d4d",
+            justify="center",
+            wraplength=700
+        ).pack(pady=10)
+        self.show_console()
+        self.write_console(f"[!] {message}")

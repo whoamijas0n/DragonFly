@@ -92,13 +92,13 @@ install_dependencies() {
 
     if [[ "$OS" == "kali" || "$OS" == "parrot" || "$OS" == "debian" || "$OS" == "ubuntu" || "$OS_LIKE" == *"debian"* || "$OS_LIKE" == *"ubuntu"* ]]; then
         apt-get update
-        apt-get install -y python3 python3-pip python3-tk python3-venv nmap macchanger aircrack-ng hostapd dnsmasq net-tools iptables bluez x11-xserver-utils
+        apt-get install -y python3 python3-pip python3-tk python3-venv nmap macchanger aircrack-ng iw ieee-data hostapd dnsmasq net-tools iptables bluez x11-xserver-utils
         
     elif [[ "$OS" == "arch" || "$OS_LIKE" == *"arch"* || "$OS" == "manjaro" ]]; then
-        pacman -Sy --noconfirm python python-pip tk nmap macchanger aircrack-ng hostapd dnsmasq net-tools iptables-nft bluez bluez-utils xorg-xhost
+        pacman -Sy --noconfirm python python-pip tk nmap macchanger aircrack-ng iw hostapd dnsmasq net-tools iptables-nft bluez bluez-utils xorg-xhost
         
     elif [[ "$OS" == "fedora" || "$OS_LIKE" == *"fedora"* ]]; then
-        dnf install -y python3 python3-pip python3-tkinter nmap macchanger aircrack-ng hostapd dnsmasq net-tools iptables bluez xhost
+        dnf install -y python3 python3-pip python3-tkinter nmap macchanger aircrack-ng iw hostapd dnsmasq net-tools iptables bluez xhost
         
     else
         print_center "[!] Sistema operativo no soportado de forma automática." "${RED}"

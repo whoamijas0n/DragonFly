@@ -6,6 +6,7 @@ Exporta todos los servicios independientes y un contenedor centralizado.
 from dragonfly.services.recon_service import ReconService
 from dragonfly.services.mac_service import MacService
 from dragonfly.services.wifi_service import WiFiService, MultiDeauthAttack
+from dragonfly.services.wifi_audit_service import WiFiAuditService
 from dragonfly.services.evil_twin_service import EvilTwinService
 from dragonfly.services.jammer_service import JammerService
 from dragonfly.services.sub1ghz_service import Sub1GHzService
@@ -30,6 +31,7 @@ class ServiceContainer:
         self.recon = ReconService(executor=self.executor)
         self.mac = MacService(executor=self.executor)
         self.wifi = WiFiService(executor=self.executor, process_manager=self.pm)
+        self.wifi_audit = WiFiAuditService(wifi_service=self.wifi)
         self.evil_twin = EvilTwinService(process_manager=self.pm)
         self.jammer = JammerService()
         self.sub1ghz = Sub1GHzService()
@@ -43,6 +45,7 @@ __all__ = [
     "ReconService",
     "MacService",
     "WiFiService",
+    "WiFiAuditService",
     "MultiDeauthAttack",
     "EvilTwinService",
     "JammerService",

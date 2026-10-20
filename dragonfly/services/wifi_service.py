@@ -14,6 +14,11 @@ from dragonfly.core.executor import CommandExecutor
 from dragonfly.core.process_manager import ProcessManager
 from dragonfly.core.subprocess_utils import safe_popen, safe_run
 from dragonfly.core.session import SessionManager
+from dragonfly.services.wifi_audit_service import (
+    enrich_networks,
+    normalize_mac,
+    parse_airodump_csv,
+)
 
 
 class MultiDeauthAttack:
@@ -136,45 +141,41 @@ class WiFiService:
 
         self.active_mon_iface = None
 
-    def scan_networks(self, mon_iface: str, duration: int = 15):
+    def scan_networks(self, mon_iface: str, duration: int = 15, band=None):
         """
         Escanea redes inalámbricas usando airodump-ng durante el tiempo indicado.
-        Retorna una lista de diccionarios con formato:
-        [{'bssid': ..., 'ch': ..., 'essid': ...}, ...]
+
+        Retorna una lista de diccionarios enriquecidos. Se conservan las claves
+        históricas ``bssid``, ``ch``, ``essid`` y ``banda`` para no romper las
+        vistas existentes, y se añaden señal, seguridad, clientes, fabricante y
+        score de honeypot.
         """
         scan_prefix = f"/tmp/scan_wifi_{int(time.time())}_{random.randint(1000, 9999)}"
-        cmd = f"sudo timeout -k 5 {duration}s airodump-ng {mon_iface} -w {scan_prefix} --output-format csv"
+        cmd = ["sudo", "timeout", "-k", "5", f"{int(duration)}s", "airodump-ng"]
+        band_key = str(band or "").strip().lower()
+        scan_band = ""
+        if band_key in {"2.4", "2.4ghz", "2.4 ghz", "bg"}:
+            cmd.extend(["--band", "bg"])
+            scan_band = "2.4"
+        elif band_key in {"5", "5ghz", "5 ghz", "a"}:
+            cmd.extend(["--band", "a"])
+            scan_band = "5"
+        cmd.extend(["-w", scan_prefix, "--output-format", "csv", mon_iface])
 
-        safe_run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-        redes = []
-        csv_file = f"{scan_prefix}-01.csv"
         try:
-            if os.path.exists(csv_file):
-                with open(csv_file, "r", errors="ignore") as f:
-                    partes = f.read().split("Station MAC,")
-                    for linea in partes[0].split("\n")[2:]:
-                        r = linea.split(",")
-                        if len(r) >= 14 and ":" in r[0]:
-                            bssid = r[0].strip()
-                            channel = r[3].strip()
-                            essid = r[13].strip() if r[13].strip() else "<Oculta>"
-                            try:
-                                ch_int = int(channel)
-                                banda = '2.4GHz' if ch_int <= 14 else '5GHz'
-                            except Exception:
-                                banda = '2.4GHz'
-                            redes.append({"bssid": bssid, "ch": channel, "essid": essid, "banda": banda})
+            safe_run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            aps, stations = parse_airodump_csv(f"{scan_prefix}-01.csv")
+            for ap in aps:
+                ap["scan_band"] = scan_band
+            return enrich_networks(aps, stations, interfaces=[mon_iface])
         except Exception:
-            pass
+            return []
         finally:
             for ext in ['-01.csv', '-01.cap', '-01.kismet.csv', '-01.kismet.netxml']:
                 try:
                     os.remove(f"{scan_prefix}{ext}")
                 except Exception:
                     pass
-
-        return redes
 
     def scan_clients(self, mon_iface: str, bssid: str, channel: str, duration: int = 10):
         """
@@ -182,31 +183,29 @@ class WiFiService:
         Retorna una lista de direcciones MAC de clientes encontrados.
         """
         scan_prefix = f"/tmp/scan_clients_{int(time.time())}_{random.randint(1000, 9999)}"
-        cmd = f"sudo timeout -k 5 {duration}s airodump-ng --bssid {bssid} -c {channel} {mon_iface} -w {scan_prefix} --output-format csv"
+        cmd = [
+            "sudo", "timeout", "-k", "5", f"{int(duration)}s", "airodump-ng",
+            "--bssid", str(bssid), "-c", str(channel),
+            "-w", scan_prefix, "--output-format", "csv", mon_iface,
+        ]
 
-        safe_run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-        clientes = []
-        csv_file = f"{scan_prefix}-01.csv"
         try:
-            if os.path.exists(csv_file):
-                with open(csv_file, "r", errors="ignore") as f:
-                    partes = f.read().split("Station MAC,")
-                    if len(partes) > 1:
-                        for linea in partes[1].split("\n")[1:]:
-                            c = linea.split(",")
-                            if len(c) >= 6 and ":" in c[0]:
-                                clientes.append(c[0].strip())
+            safe_run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            _aps, stations = parse_airodump_csv(f"{scan_prefix}-01.csv")
+            clientes = [
+                station["station_mac"]
+                for station in stations
+                if normalize_mac(station.get("bssid"))
+            ]
+            return list(dict.fromkeys(clientes))
         except Exception:
-            pass
+            return []
         finally:
             for ext in ['-01.csv', '-01.cap', '-01.kismet.csv', '-01.kismet.netxml']:
                 try:
                     os.remove(f"{scan_prefix}{ext}")
                 except Exception:
                     pass
-
-        return clientes
 
     def start_handshake_capture(self, mon_iface: str, target_red: dict, cliente_mac: str = "FF:FF:FF:FF:FF:FF",
                                 on_output=None, on_finish=None):
@@ -321,52 +320,77 @@ class WiFiService:
         """
         Escanea el espectro con dos interfaces simultáneamente (útil para 2.4GHz + 5GHz).
         Retorna (redes_unicas, iface_map).
+
+        Se mantiene la deduplicación por BSSID para compatibilidad con las vistas
+        existentes. El flujo WiFi Audit 2.0 usa su propio merge por (BSSID, banda).
         """
         prefix1 = f"/tmp/dual_scan1_{int(time.time())}_{random.randint(1000, 9999)}"
         prefix2 = f"/tmp/dual_scan2_{int(time.time())}_{random.randint(1000, 9999)}"
 
-        cmd1 = f"sudo timeout -k 5 {duration}s airodump-ng {mon1} -w {prefix1} --output-format csv"
-        cmd2 = f"sudo timeout -k 5 {duration}s airodump-ng {mon2} -w {prefix2} --output-format csv"
+        cmd1 = [
+            "sudo", "timeout", "-k", "5", f"{int(duration)}s", "airodump-ng",
+            "-w", prefix1, "--output-format", "csv", mon1,
+        ]
+        cmd2 = [
+            "sudo", "timeout", "-k", "5", f"{int(duration)}s", "airodump-ng",
+            "-w", prefix2, "--output-format", "csv", mon2,
+        ]
 
-        p1 = safe_popen(cmd1, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        p2 = safe_popen(cmd2, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        p1.wait()
-        p2.wait()
+        raw_aps = []
+        all_stations = []
+        iface_by_bssid = {}
+        try:
+            p1 = safe_popen(cmd1, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            p2 = safe_popen(cmd2, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            p1.wait()
+            p2.wait()
 
-        redes = []
-        iface_map = {}
-
-        def parsear(prefix, mon_iface):
-            csv_file = f"{prefix}-01.csv"
-            try:
-                if os.path.exists(csv_file):
-                    with open(csv_file, "r", errors="ignore") as f:
-                        partes = f.read().split("Station MAC,")
-                        for linea in partes[0].split("\n")[2:]:
-                            r = linea.split(",")
-                            if len(r) >= 14 and ":" in r[0]:
-                                bssid = r[0].strip()
-                                ch = r[3].strip()
-                                essid = r[13].strip() or "<Oculta>"
-                                try:
-                                    banda = '2.4GHz' if int(ch) <= 14 else '5GHz'
-                                except Exception:
-                                    banda = '2.4GHz'
-                                redes.append({"bssid": bssid, "ch": ch, "essid": essid, "banda": banda})
-                                iface_map[bssid] = mon_iface
-            except Exception:
-                pass
-            finally:
+            for prefix, mon_iface in ((prefix1, mon1), (prefix2, mon2)):
+                aps, stations = parse_airodump_csv(f"{prefix}-01.csv")
+                for ap in aps:
+                    bssid = normalize_mac(ap.get("bssid"))
+                    if not bssid:
+                        continue
+                    ap["source_iface"] = mon_iface
+                    raw_aps.append(ap)
+                    iface_by_bssid.setdefault(bssid, mon_iface)
+                all_stations.extend(stations)
+        finally:
+            for prefix in (prefix1, prefix2):
                 for ext in ['-01.csv', '-01.cap', '-01.kismet.csv', '-01.kismet.netxml']:
                     try:
                         os.remove(f"{prefix}{ext}")
                     except Exception:
                         pass
 
-        parsear(prefix1, mon1)
-        parsear(prefix2, mon2)
+        # Deduplicar por BSSID conservando la lectura con mejor señal.
+        unique_aps = {}
+        for ap in raw_aps:
+            bssid = normalize_mac(ap.get("bssid"))
+            if not bssid:
+                continue
+            previous = unique_aps.get(bssid)
+            if previous is None:
+                unique_aps[bssid] = ap
+                continue
+            new_power = ap.get("power")
+            old_power = previous.get("power")
+            if (
+                isinstance(new_power, int) and new_power != -1
+                and (not isinstance(old_power, int) or old_power == -1 or new_power > old_power)
+            ):
+                unique_aps[bssid] = ap
+                iface_by_bssid[bssid] = ap.get("source_iface", iface_by_bssid.get(bssid, mon1))
 
-        redes_unicas = list({v['bssid']: v for v in redes}.values())
+        redes_unicas = enrich_networks(
+            list(unique_aps.values()),
+            all_stations,
+            interfaces=[mon1, mon2],
+        )
+        iface_map = {
+            red["bssid"]: iface_by_bssid.get(red["bssid"], mon1)
+            for red in redes_unicas
+        }
         return redes_unicas, iface_map
 
     def scan_clients_passive(self, mon_iface: str, bssid: str, channel: str, duration: int = 30):
@@ -376,32 +400,30 @@ class WiFiService:
         prefix = f"/tmp/client_enum_{int(time.time())}_{random.randint(1000, 9999)}"
         safe_run(["sudo", "iw", "dev", mon_iface, "set", "channel", str(channel)],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        cmd = f"sudo timeout -k 5 {duration}s airodump-ng --bssid {bssid} -c {channel} {mon_iface} -w {prefix} --output-format csv"
-        proc = safe_popen(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        cmd = [
+            "sudo", "timeout", "-k", "5", f"{int(duration)}s", "airodump-ng",
+            "--bssid", str(bssid), "-c", str(channel),
+            "-w", prefix, "--output-format", "csv", mon_iface,
+        ]
+        proc = safe_popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.pm.register("client_enum", proc)
-        proc.wait()
-
-        clientes = []
-        csv_file = f"{prefix}-01.csv"
         try:
-            if os.path.exists(csv_file):
-                with open(csv_file, "r", errors="ignore") as f:
-                    partes = f.read().split("Station MAC,")
-                    if len(partes) > 1:
-                        for linea in partes[1].split("\n")[1:]:
-                            c = linea.split(",")
-                            if len(c) >= 6 and ":" in c[0]:
-                                clientes.append(c[0].strip())
+            proc.wait()
+            _aps, stations = parse_airodump_csv(f"{prefix}-01.csv")
+            clientes = [
+                station["station_mac"]
+                for station in stations
+                if normalize_mac(station.get("bssid"))
+            ]
+            return list(dict.fromkeys(clientes))
         except Exception:
-            pass
+            return []
         finally:
             for ext in ['-01.csv', '-01.cap', '-01.kismet.csv', '-01.kismet.netxml']:
                 try:
                     os.remove(f"{prefix}{ext}")
                 except Exception:
                     pass
-
-        return clientes
 
     def scan_clients_dual(self, targets: list, duration: int = 30):
         """

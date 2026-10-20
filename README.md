@@ -123,13 +123,14 @@ Cada operación baja la interfaz, aplica el cambio con `macchanger` y la vuelve 
 
 #### 3. Auditoría WiFi
 
-Módulo central de auditoría inalámbrica. Agrupa cinco flujos de ataque/análisis:
+Módulo central de auditoría inalámbrica. Agrupa seis flujos de ataque/análisis:
 
+- **Reconocimiento WiFi (WiFi Audit 2.0 v1)**: escaneo pasivo single-band o dual-band con una o dos interfaces. Registra SSID, BSSID, canal, banda, señal en dBm y porcentaje, seguridad/cifrado/autenticación, beacons, data/IV, clientes observados por red, fabricante del AP por OUI y un score heurístico de honeypot con motivos. No inyecta tráfico ni identifica el ISP real (solo es posible con conexión/autorización). Los reportes se guardan en `Resultados_Auditoria/Auditoria-{timestamp}/` como `redes.json`, `redes.csv` y `reporte.txt`, y se pueden consultar desde “Explorar Auditorías WiFi”. En dual-band se requieren dos radios con `phy` distintos (por ejemplo, Wi-Fi onboard 2.4 GHz + adaptador USB 5 GHz).
 - **Activar Monitor**: pone la interfaz seleccionada en modo monitor usando `airmon-ng`, terminando procesos conflictivos antes.
 - **Captura Handshake**: escanea redes disponibles durante 15 segundos, permite seleccionar el objetivo y un cliente (o broadcast), y lanza `airodump-ng` para captura simultánea con `aireplay-ng -0` para forzar la reautenticación. Los archivos `.cap` se guardan en `Resultados_Handshake/Auditoria-{timestamp}/`.
 - **Ataque Evil Twin**: flujo completo de AP falso con portal cautivo (ver sección dedicada más adelante).
 - **Desautenticación**: envía paquetes deauth dirigidos a un cliente o en broadcast contra un BSSID objetivo.
-- **Explorar Handshakes / Explorar Evil Twin**: navegador de archivos integrado para revisar capturas y credenciales de sesiones anteriores.
+- **Explorar Handshakes / Explorar Evil Twin / Explorar Auditorías WiFi**: navegador de archivos integrado para revisar capturas, credenciales y reportes de reconocimiento de sesiones anteriores.
 
 #### 4. Gadget NRF24 JAMMER
 
@@ -168,13 +169,14 @@ Conjunto de herramientas de soporte operacional, ampliado para gestionar los nue
 
 ### Gestión de Archivos y Sesiones
 
-El script crea y mantiene tres directorios raíz en la misma ubicación desde donde se ejecuta:
+El script crea y mantiene varios directorios raíz en la misma ubicación desde donde se ejecuta:
 
 
 | Directorio | Contenido |
 |---|---|
 | `Resultados_Nmap/` | Carpetas de sesión con archivos `.txt` de salida de Nmap |
 | `Resultados_Handshake/` | Capturas `.cap` de handshakes WPA/WPA2 |
+| `Resultados_Auditoria/` | Reportes JSON/CSV/TXT del reconocimiento WiFi pasivo |
 | `Resultados_EvilTwin/` | Archivos `credentials.log` con datos capturados por el portal |
 
 

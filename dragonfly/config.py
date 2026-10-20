@@ -14,6 +14,7 @@ BASE_DIR_WIFI = os.path.join(PROJECT_ROOT, "Resultados_Handshake")
 BASE_DIR_EVIL = os.path.join(PROJECT_ROOT, "Resultados_EvilTwin")
 BASE_DIR_POISON = os.path.join(PROJECT_ROOT, "Resultados_Poison")
 BASE_DIR_CLIENTS = os.path.join(PROJECT_ROOT, "Resultados_Clientes")
+BASE_DIR_WIFI_AUDIT = os.path.join(PROJECT_ROOT, "Resultados_Auditoria")
 BASE_DIR_BLE = os.path.join(PROJECT_ROOT, "Resultados_BLE")
 
 # Directorios de recursos

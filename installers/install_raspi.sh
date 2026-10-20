@@ -72,7 +72,7 @@ instalar_dependencias() {
     # Se incluyen openbox, fuentes de x11, fbdev para la pantalla TFT, netifaces, aioquic y git/openssl
     DEBIAN_FRONTEND=noninteractive apt-get install -y \
         python3 python3-tk python3-serial \
-        nmap macchanger aircrack-ng hostapd dnsmasq iptables \
+        nmap macchanger aircrack-ng iw ieee-data hostapd dnsmasq iptables \
         network-manager bluez rfkill \
         xserver-xorg xinit x11-xserver-utils \
         xserver-xorg-input-libinput xserver-xorg-input-evdev \

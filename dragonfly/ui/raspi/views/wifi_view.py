@@ -16,8 +16,13 @@ import tkinter as tk
 from tkinter import ttk
 from dragonfly.ui.raspi.views.base_view import BaseView
 from dragonfly.ui.raspi.widgets import ScrollableFrame
-from dragonfly.config import BASE_DIR_WIFI, BASE_DIR_EVIL, BASE_DIR_CLIENTS
+from dragonfly.config import BASE_DIR_WIFI, BASE_DIR_EVIL, BASE_DIR_CLIENTS, BASE_DIR_WIFI_AUDIT
 from dragonfly.core.hardware import get_wifi_interfaces, get_network_interfaces
+from dragonfly.services.wifi_audit_service import (
+    format_network_compact,
+    format_network_detail,
+    format_summary,
+)
 from dragonfly.ui.raspi.theme import (
     COLOR_TEXTO_EXITO,
     COLOR_TEXTO_SECUNDARIO,
@@ -48,7 +53,7 @@ class WiFiView(BaseView):
         self.btn_detener_evil = None
 
     def render(self):
-        """Menú principal de auditoría WiFi con las 7 opciones completas."""
+        """Menú principal de auditoría WiFi con reconocimiento pasivo y flujos ofensivos."""
         self.clear_frame()
         self.add_back_button(self.app.views['inicio'].render)
 
@@ -58,6 +63,7 @@ class WiFiView(BaseView):
         scroll_wifi.pack(fill='both', expand=True, padx=2, pady=2)
 
         opciones = [
+            ("Reconocimiento WiFi", self._flow_audit_menu),
             ("Clientes Conectados", self._flow_client_list),
             ("Captura Handshake", self._flow_handshake_start),
             ("Ataque Evil Twin", self._flow_evil_twin_start),
@@ -65,6 +71,7 @@ class WiFiView(BaseView):
             ("Explorar Handshakes", lambda: self.app.views['explorer'].show_sessions(BASE_DIR_WIFI, "Handshakes", self.render)),
             ("Explorar Evil Twin", lambda: self.app.views['explorer'].show_sessions(BASE_DIR_EVIL, "Evil Twin", self.render)),
             ("Explorar Clientes", lambda: self.app.views['explorer'].show_sessions(BASE_DIR_CLIENTS, "Clientes", self.render)),
+            ("Explorar Auditorías WiFi", lambda: self.app.views['explorer'].show_sessions(BASE_DIR_WIFI_AUDIT, "Auditorías WiFi", self.render)),
         ]
 
         for texto, cmd in opciones:
@@ -1527,3 +1534,350 @@ class WiFiView(BaseView):
         self.show_console(parent=scroll.scrollable_frame)
 
         self.services.wifi.start_dual_deauth(mon1, mon2, red1, red2, burst=burst, callback=self.write_console)
+
+    # =========================================================================
+    # 8. RECONOCIMIENTO WIFI (WIFI AUDIT 2.0 - V1)
+    # =========================================================================
+    def _ensure_audit_report_saved(self, force=False):
+        """Garantiza que el resultado actual exista en el directorio de auditorías."""
+        result = self.wifi_state.get("audit_result") or {}
+        networks = result.get("networks") or []
+        if not networks:
+            return result.get("session_dir", "")
+
+        session_dir = result.get("session_dir")
+        report_path = os.path.join(session_dir, "redes.json") if session_dir else ""
+        if not force and report_path and os.path.isfile(report_path):
+            return session_dir
+
+        session_dir = self.services.wifi_audit.save_report(
+            networks,
+            result.get("summary"),
+            session_dir=session_dir,
+        )
+        result["session_dir"] = session_dir
+        self.wifi_state["audit_result"] = result
+        return session_dir
+
+    def _flow_audit_finish(self):
+        """Detiene el escaneo, guarda lo obtenido y vuelve al menú WiFi principal."""
+        if self.wifi_state.get("audit_finishing"):
+            return
+        self.wifi_state["audit_finishing"] = True
+        self.wifi_state["audit_token"] = None
+        self.write_console("[*] Finalizando auditoría WiFi...")
+
+        try:
+            session_dir = self._ensure_audit_report_saved()
+            if session_dir:
+                self.write_console(f"[+] Resultados guardados en {session_dir}")
+        except Exception as exc:
+            self.write_console(f"[!] Error al guardar resultados: {exc}")
+
+        def cleanup():
+            try:
+                self.services.wifi_audit.cancel_scan()
+                if not self.services.wifi_audit.wait_for_idle(timeout=15):
+                    self.write_console("[!] El escaneo todavía se está deteniendo.")
+            except Exception as exc:
+                self.write_console(f"[!] Error al finalizar auditoría: {exc}")
+            finally:
+                self.run_on_ui(self._finish_audit_return)
+
+        threading.Thread(target=cleanup, daemon=True).start()
+
+    def _finish_audit_return(self):
+        self.wifi_state["audit_finishing"] = False
+        self.wifi_state["audit_result"] = {}
+        self.render()
+
+    def _flow_audit_menu(self):
+        """Menú del reconocimiento pasivo: single-band o dual-band."""
+        self.wifi_state["audit_token"] = None
+        self.clear_frame()
+        self.add_back_button(self.render)
+        ttk.Label(self.main_frame, text="RECONOCIMIENTO WIFI", style='Title.TLabel').pack(pady=2)
+
+        scroll = ScrollableFrame(self.main_frame, max_items=8)
+        scroll.pack(fill='both', expand=True, padx=2, pady=2)
+
+        scroll.add_button(
+            text="Single-band (1 interfaz)",
+            command=self._flow_audit_single_select_iface,
+            style='Red.TButton',
+            width=28
+        )
+        scroll.add_button(
+            text="Dual-band (2 interfaces)",
+            command=self._flow_audit_dual_select_ifaces,
+            style='Danger.TButton',
+            width=28
+        )
+        self.show_console(parent=scroll.scrollable_frame)
+
+    def _flow_audit_single_select_iface(self):
+        self.clear_frame()
+        self.add_back_button(self._flow_audit_menu)
+        ttk.Label(self.main_frame, text="SINGLE-BAND: IFACE", style='Title.TLabel').pack(pady=2)
+
+        interfaces = get_wifi_interfaces()
+        if not interfaces:
+            ttk.Label(self.main_frame, text="No hay interfaces WiFi.", style='Dark.TLabel').pack(pady=10)
+            self.show_console()
+            return
+
+        scroll = ScrollableFrame(self.main_frame, max_items=10)
+        scroll.pack(fill='both', expand=True, padx=2, pady=2)
+        ttk.Label(scroll.scrollable_frame, text="Seleccione interfaz:", style='Gray.TLabel').pack(pady=(0, 4))
+
+        for iface in interfaces:
+            scroll.add_button(
+                text=iface,
+                command=lambda i=iface: self._flow_audit_select_band(i),
+                style='Red.TButton',
+                width=28
+            )
+
+        self.show_console(parent=scroll.scrollable_frame)
+
+    def _flow_audit_select_band(self, iface):
+        self.clear_frame()
+        self.add_back_button(self._flow_audit_single_select_iface)
+        ttk.Label(self.main_frame, text=f"BANDA: {iface}", style='Title.TLabel').pack(pady=2)
+
+        scroll = ScrollableFrame(self.main_frame, max_items=8)
+        scroll.pack(fill='both', expand=True, padx=2, pady=2)
+        ttk.Label(
+            scroll.scrollable_frame,
+            text="Auto no filtra la banda y puede tardar más.",
+            style='Gray.TLabel',
+            wraplength=290,
+            justify='center'
+        ).pack(anchor='center', padx=6, pady=(0, 4))
+
+        for label, band in (("2.4 GHz", "2.4"), ("5 GHz", "5"), ("Auto", None)):
+            scroll.add_button(
+                text=label,
+                command=lambda b=band: self._flow_audit_scan(iface, band=b),
+                style='Red.TButton',
+                width=28
+            )
+
+        self.show_console(parent=scroll.scrollable_frame)
+
+    def _flow_audit_dual_select_ifaces(self):
+        interfaces = get_wifi_interfaces()
+        if len(interfaces) < 2:
+            self.clear_frame()
+            self.add_back_button(self._flow_audit_menu)
+            ttk.Label(self.main_frame, text="DUAL-BAND", style='Title.TLabel').pack(pady=2)
+            ttk.Label(
+                self.main_frame,
+                text="Se requieren 2 interfaces WiFi independientes:\n"
+                     "1 para 2.4 GHz y 1 para 5 GHz.",
+                style='Mono.TLabel',
+                justify='left',
+                wraplength=290
+            ).pack(padx=8, pady=10)
+            self.show_console()
+            return
+
+        self.clear_frame()
+        self.add_back_button(self._flow_audit_menu)
+        ttk.Label(self.main_frame, text="DUAL-BAND: IFACES", style='Title.TLabel').pack(pady=2)
+
+        scroll = ScrollableFrame(self.main_frame, max_items=10)
+        scroll.pack(fill='both', expand=True, padx=2, pady=2)
+        ttk.Label(
+            scroll.scrollable_frame,
+            text="1ª = 2.4 GHz | 2ª = 5 GHz\nSeleccione en ese orden.",
+            style='Mono.TLabel',
+            justify='center'
+        ).pack(pady=(0, 4))
+
+        self.wifi_state["audit_dual"] = {"selected": [], "btns": []}
+        for iface in interfaces:
+            btn = scroll.add_button(
+                text=iface,
+                command=lambda i=iface: self._flow_audit_dual_add(i),
+                style='Red.TButton',
+                width=28
+            )
+            if btn:
+                self.wifi_state["audit_dual"]["btns"].append(btn)
+
+        self.show_console(parent=scroll.scrollable_frame)
+
+    def _flow_audit_dual_add(self, iface):
+        state = self.wifi_state.get("audit_dual")
+        if not state:
+            return
+        selected = state["selected"]
+        if iface in selected or len(selected) >= 2:
+            return
+        selected.append(iface)
+
+        for btn in state["btns"]:
+            if btn.cget("text") == iface:
+                btn.config(style='Gray.TButton')
+                btn.state(['disabled'])
+                break
+
+        if len(selected) == 2:
+            self.write_console(f"[*] Interfaz 2.4 GHz: {selected[0]}")
+            self.write_console(f"[*] Interfaz 5 GHz: {selected[1]}")
+            self._flow_audit_scan(selected[0], band="2.4", iface_5g=selected[1])
+
+    def _flow_audit_scan(self, iface, band=None, iface_5g=None):
+        token = object()
+        self.wifi_state["audit_token"] = token
+        self.wifi_state["audit_result"] = {}
+        self.clear_frame()
+        self.add_back_button(self._flow_audit_menu)
+        ttk.Label(self.main_frame, text="RECONOCIENDO...", style='Title.TLabel').pack(pady=2)
+
+        scroll = ScrollableFrame(self.main_frame, max_items=4)
+        scroll.pack(fill='both', expand=True, padx=2, pady=2)
+        ttk.Label(
+            scroll.scrollable_frame,
+            text="Escaneo pasivo: no se inyecta tráfico.\nLa interfaz se restaura al finalizar.",
+            style='Gray.TLabel',
+            justify='center',
+            wraplength=290
+        ).pack(anchor='center', padx=6, pady=(2, 4))
+        scroll.add_button(
+            text="FINALIZAR AUDITORÍA",
+            command=self._flow_audit_finish,
+            style='Danger.TButton',
+            width=28
+        )
+        self.show_console(parent=scroll.scrollable_frame)
+
+        def worker():
+            try:
+                if iface_5g:
+                    result = self.services.wifi_audit.scan_dual(
+                        iface, iface_5g, duration=20, on_output=self.write_console
+                    )
+                else:
+                    result = self.services.wifi_audit.scan_single(
+                        iface, duration=20, band=band, on_output=self.write_console
+                    )
+                self.run_on_ui(
+                    lambda: self._flow_audit_show_networks(result)
+                    if self.wifi_state.get("audit_token") is token else None
+                )
+            except Exception as exc:
+                message = str(exc)
+                self.run_on_ui(
+                    lambda e=message: self._flow_audit_error(e)
+                    if self.wifi_state.get("audit_token") is token else None
+                )
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _flow_audit_show_networks(self, result):
+        result = result or {}
+        self.wifi_state["audit_result"] = result
+        redes = result.get("networks", [])
+        summary = result.get("summary", {})
+        session_dir = result.get("session_dir", "")
+
+        self.clear_frame()
+        self.add_back_button(self._flow_audit_menu)
+        ttk.Label(self.main_frame, text=f"REDES DETECTADAS ({len(redes)})", style='Title.TLabel').pack(pady=2)
+
+        scroll = ScrollableFrame(self.main_frame, max_items=80)
+        scroll.pack(fill='both', expand=True, padx=5, pady=2)
+
+        ttk.Label(
+            scroll.scrollable_frame,
+            text=format_summary(summary),
+            style='Gray.TLabel',
+            justify='center',
+            wraplength=290
+        ).pack(anchor='center', padx=6, pady=(2, 4))
+
+        scroll.add_button(
+            text="FINALIZAR AUDITORÍA",
+            command=self._flow_audit_finish,
+            style='Danger.TButton',
+            width=28
+        )
+
+        if not redes:
+            ttk.Label(
+                scroll.scrollable_frame,
+                text="No se detectaron redes en el rango.",
+                style='Dark.TLabel'
+            ).pack(pady=10)
+        else:
+            for net in redes:
+                score = int(net.get("honeypot_score") or 0)
+                if score >= 50:
+                    style = 'Red.TButton'
+                elif score >= 25:
+                    style = 'Danger.TButton'
+                else:
+                    style = 'Gray.TButton'
+                scroll.add_button(
+                    text=format_network_compact(net),
+                    command=lambda n=net: self._flow_audit_detail(n),
+                    style=style,
+                    width=28
+                )
+
+        self.show_console(parent=scroll.scrollable_frame)
+        if session_dir:
+            self.write_console(f"[+] Reporte: {session_dir}")
+        gc.collect()
+
+    def _flow_audit_detail(self, net):
+        try:
+            session_dir = self._ensure_audit_report_saved(force=True)
+        except Exception as exc:
+            session_dir = ""
+            self.write_console(f"[!] Error al guardar resultados: {exc}")
+
+        self.clear_frame()
+        self.add_back_button(
+            lambda: self._flow_audit_show_networks(self.wifi_state.get("audit_result", {}))
+        )
+        ttk.Label(
+            self.main_frame,
+            text=str(net.get("essid", "Detalle"))[:22],
+            style='Title.TLabel'
+        ).pack(pady=2)
+
+        scroll = ScrollableFrame(self.main_frame, max_items=8)
+        scroll.pack(fill='both', expand=True, padx=5, pady=2)
+        ttk.Label(
+            scroll.scrollable_frame,
+            text=format_network_detail(net),
+            style='Mono.TLabel',
+            justify='left',
+            wraplength=292
+        ).pack(anchor='w', padx=5, pady=3)
+        if session_dir:
+            ttk.Label(
+                scroll.scrollable_frame,
+                text=f"Guardado: {os.path.basename(session_dir)}",
+                style='Gray.TLabel',
+                justify='left',
+                wraplength=292
+            ).pack(anchor='w', padx=5, pady=(0, 3))
+        gc.collect()
+
+    def _flow_audit_error(self, message):
+        self.clear_frame()
+        self.add_back_button(self._flow_audit_menu)
+        ttk.Label(self.main_frame, text="ERROR DE RECONOCIMIENTO", style='Title.TLabel').pack(pady=2)
+        ttk.Label(
+            self.main_frame,
+            text=str(message),
+            style='Mono.TLabel',
+            justify='left',
+            wraplength=290
+        ).pack(padx=8, pady=10)
+        self.show_console()
+        self.write_console(f"[!] {message}")
