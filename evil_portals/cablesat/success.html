@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>CableSat | Conexión restablecida</title>
+<link rel="icon" href="data:,">
+<style>
+  :root { --navy:#062a4a; --cyan:#00a9e0; --green:#1fa971; --ink:#102a43; --muted:#627d98; --line:#d9e2ec; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    min-height:100vh; min-height:100dvh;
+    display:flex; align-items:center; justify-content:center; padding:20px 16px;
+    color:var(--ink);
+    background:
+      radial-gradient(circle at 12% 12%, rgba(0,169,224,.18), transparent 38%),
+      radial-gradient(circle at 88% 88%, rgba(0,169,224,.12), transparent 42%),
+      linear-gradient(145deg,#04203a 0%,#062a4a 55%,#0a3d68 100%);
+  }
+  .card { width:100%; max-width:440px; background:#fff; border-radius:20px; overflow:hidden; box-shadow:0 28px 70px rgba(0,0,0,.42); animation:rise .4s ease-out both; }
+  @keyframes rise { from { opacity:0; transform:translateY(12px) scale(.985); } to { opacity:1; transform:translateY(0) scale(1); } }
+  .brandbar { display:flex; align-items:center; justify-content:space-between; padding:18px 24px; border-bottom:1px solid #edf2f7; }
+  .brand { display:flex; align-items:center; gap:10px; }
+  .brand-mark { width:38px; height:38px; border-radius:11px; background:linear-gradient(145deg,var(--navy),#0b5b91); display:grid; place-items:center; }
+  .brand-mark svg { width:23px; height:23px; }
+  .wordmark { font-size:24px; font-weight:800; letter-spacing:-1.1px; color:var(--navy); line-height:1; }
+  .wordmark span { color:var(--cyan); }
+  .brand-sub { display: block; margin-top:3px; font-size:9px; font-weight:700; letter-spacing:2.2px; color:#829ab1; text-transform:uppercase; }
+  .body { padding:38px 28px 34px; text-align:center; }
+  .check { width:78px; height:78px; margin:0 auto 22px; border-radius:50%; display:grid; place-items:center; background:#e9f9f2; border:1px solid #bfeeda; box-shadow:0 0 0 10px #f4fcf8; }
+  .check svg { width:38px; height:38px; }
+  h1 { font-size:23px; line-height:1.2; letter-spacing:-.4px; margin-bottom:9px; color:var(--navy); }
+  p { font-size:13.5px; line-height:1.6; color:var(--muted); max-width:330px; margin:0 auto; }
+  .status { margin:24px 0 4px; padding:13px 14px; border:1px solid #d7f0e4; border-radius:11px; background:#f6fdf9; display:flex; align-items:center; gap:10px; text-align:left; }
+  .status-icon { width:30px; height:30px; border-radius:50%; background:#e9f9f2; display:grid; place-items:center; flex:0 0 auto; }
+  .status-icon svg { width:16px; height:16px; }
+  .status-title { font-size:12px; font-weight:800; color:#0f6b49; }
+  .status-text { font-size:10.5px; color:#4f8b73; margin-top:2px; }
+  .progress { height:4px; border-radius:999px; background:#edf2f7; overflow:hidden; margin:20px 0 0; }
+  .progress span { display:block; height:100%; width:100%; border-radius:999px; background:linear-gradient(90deg,var(--cyan),var(--green)); animation:load 1.2s ease-out both; }
+  @keyframes load { from { width:0; } to { width:100%; } }
+  .hint { margin-top:20px; font-size:11px; color:#9fb3c8; line-height:1.5; }
+  .footer { padding:14px 24px 17px; text-align:center; font-size:9.5px; line-height:1.5; color:#9fb3c8; background:#fbfdff; border-top:1px solid #edf2f7; }
+  .footer strong { color:#627d98; }
+  @media (max-width:380px) { body { padding:10px; } .brandbar { padding:15px 17px; } .body { padding:32px 20px 28px; } .footer { padding:12px 17px 15px; } h1 { font-size:21px; } }
+</style>
+</head>
+<body>
+  <main class="card" role="main">
+    <header class="brandbar">
+      <div class="brand" aria-label="CableSat El Salvador">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M4 8.5C6.2 6.3 8.9 5.1 12 5.1C15.1 5.1 17.8 6.3 20 8.5" stroke="#00a9e0" stroke-width="1.8" stroke-linecap="round"/>
+            <path d="M6.7 11.4C8.1 10 9.9 9.2 12 9.2C14.1 9.2 15.9 10 17.3 11.4" stroke="#00a9e0" stroke-width="1.8" stroke-linecap="round"/>
+            <path d="M9.4 14.3C10.1 13.6 11 13.2 12 13.2C13 13.2 13.9 13.6 14.6 14.3" stroke="#00a9e0" stroke-width="1.8" stroke-linecap="round"/>
+            <circle cx="12" cy="17.5" r="1.35" fill="#00a9e0"/>
+          </svg>
+        </span>
+        <span>
+          <span class="wordmark">cable<span>sat</span></span>
+          <span class="brand-sub">Fibra &amp; Hogar</span>
+        </span>
+      </div>
+      <span style="font-size:10px;font-weight:800;letter-spacing:1.6px;color:#062a4a;border:1px solid #d9e2ec;border-radius:999px;padding:6px 10px;white-space:nowrap;">EL SALVADOR</span>
+    </header>
+
+    <section class="body">
+      <div class="check" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M5 12.5L9.4 17L19 7.5" stroke="#1fa971" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <h1>Tu conexión fue restablecida</h1>
+      <p>La contraseña de tu red WiFi se verificó correctamente. El servicio de Internet ya está disponible en tus dispositivos.</p>
+
+      <div class="status">
+        <span class="status-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M4 8.5C6.2 6.3 8.9 5.1 12 5.1C15.1 5.1 17.8 6.3 20 8.5" stroke="#1fa971" stroke-width="1.8" stroke-linecap="round"/>
+            <path d="M6.7 11.4C8.1 10 9.9 9.2 12 9.2C14.1 9.2 15.9 10 17.3 11.4" stroke="#1fa971" stroke-width="1.8" stroke-linecap="round"/>
+            <path d="M9.4 14.3C10.1 13.6 11 13.2 12 13.2C13 13.2 13.9 13.6 14.6 14.3" stroke="#1fa971" stroke-width="1.8" stroke-linecap="round"/>
+            <circle cx="12" cy="17.5" r="1.35" fill="#1fa971"/>
+          </svg>
+        </span>
+        <div>
+          <div class="status-title">Red CableSat conectada</div>
+          <div class="status-text">Módem Huawei HG8245H · 192.168.100.1</div>
+        </div>
+      </div>
+
+      <div class="progress" aria-hidden="true"><span></span></div>
+      <p class="hint">Ya puedes cerrar esta ventana y continuar navegando.</p>
+    </section>
+
+    <footer class="footer"><strong>CableSat El Salvador</strong> · Soporte técnico 24/7<br>© 2026 CableSat. Uso exclusivo para la red del hogar.</footer>
+  </main>
+</body>
+</html>

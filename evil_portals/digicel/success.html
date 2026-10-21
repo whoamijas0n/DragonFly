@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Digicel | Conexión activada</title>
+<link rel="icon" href="data:,">
+<style>
+  :root { --red:#e4002b; --red-dark:#a8001f; --green:#1fa971; --ink:#1d1d1f; --muted:#6f7278; --line:#e6e6e9; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    min-height:100vh; min-height:100dvh;
+    display:flex; align-items:center; justify-content:center; padding:20px 16px;
+    color:var(--ink);
+    background:
+      radial-gradient(circle at 10% 10%, rgba(228,0,43,.26), transparent 38%),
+      radial-gradient(circle at 90% 90%, rgba(228,0,43,.16), transparent 42%),
+      linear-gradient(145deg,#1a0006 0%,#35000e 50%,#5c0018 100%);
+  }
+  .card { width:100%; max-width:450px; background:#fff; border-radius:20px; overflow:hidden; box-shadow:0 30px 72px rgba(0,0,0,.5); animation:rise .4s ease-out both; }
+  @keyframes rise { from { opacity:0; transform:translateY(12px) scale(.985); } to { opacity:1; transform:translateY(0) scale(1); } }
+  .brandbar { padding:18px 24px; display:flex; align-items:center; justify-content:space-between; gap:12px; background:linear-gradient(135deg,#e4002b 0%,#c50025 60%,#a8001f 100%); color:#fff; position:relative; overflow:hidden; }
+  .brandbar::after { content:""; position:absolute; width:160px; height:160px; border-radius:50%; border:1px solid rgba(255,255,255,.14); right:-70px; top:-90px; }
+  .brand { display:flex; align-items:center; gap:10px; position:relative; z-index:1; }
+  .brand-mark { width:40px; height:40px; border-radius:12px; background:rgba(255,255,255,.14); border:1px solid rgba(255,255,255,.2); display:grid; place-items:center; }
+  .brand-mark svg { width:24px; height:24px; }
+  .wordmark { font-size:26px; line-height:1; font-weight:800; letter-spacing:-.9px; color:#fff; }
+  .brand-sub { display: block; font-size:9px; font-weight:800; letter-spacing:2px; color:#ffd1d9; text-transform:uppercase; margin-top:3px; }
+  .body { padding:38px 28px 32px; text-align:center; }
+  .check { width:76px; height:76px; margin:0 auto 21px; border-radius:50%; display:grid; place-items:center; background:#eaf8f1; border:1px solid #c6ebd9; box-shadow:0 0 0 10px #f5fcf8; }
+  .check svg { width:37px; height:37px; }
+  h1 { font-size:23px; line-height:1.2; letter-spacing:-.4px; margin-bottom:9px; color:#211114; }
+  p { font-size:13.5px; line-height:1.6; color:var(--muted); max-width:330px; margin:0 auto; }
+  .status { margin:23px 0 0; padding:13px 14px; border:1px solid #d7f0e4; border-radius:11px; background:#f7fdf9; display:flex; align-items:center; gap:10px; text-align:left; }
+  .status-icon { width:30px; height:30px; border-radius:50%; background:#eaf8f1; display:grid; place-items:center; flex:0 0 auto; }
+  .status-icon svg { width:16px; height:16px; }
+  .status-title { font-size:12px; font-weight:800; color:#116b46; }
+  .status-text { font-size:10.5px; color:#4f8b73; margin-top:2px; }
+  .bar { height:4px; border-radius:999px; background:#f2edee; overflow:hidden; margin:20px 0 0; }
+  .bar span { display:block; height:100%; width:100%; border-radius:999px; background:linear-gradient(90deg,var(--red),#ff7a5c); animation:load 1.2s ease-out both; }
+  @keyframes load { from { width:0; } to { width:100%; } }
+  .hint { margin-top:19px; font-size:11px; color:#a99c9e; line-height:1.5; }
+  .footer { padding:14px 24px 17px; text-align:center; font-size:9.5px; line-height:1.55; color:#a99c9e; background:#fcfcfc; border-top:1px solid #f4e7e9; }
+  .footer strong { color:#8b7c7f; }
+  @media (max-width:380px) { body { padding:10px; } .brandbar { padding:15px 17px; } .body { padding:32px 20px 27px; } .footer { padding:12px 17px 15px; } h1 { font-size:21px; } }
+</style>
+</head>
+<body>
+  <main class="card" role="main">
+    <header class="brandbar">
+      <div class="brand" aria-label="Digicel Home">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M4 8.5C6.2 6.3 8.9 5.1 12 5.1C15.1 5.1 17.8 6.3 20 8.5" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round"/>
+            <path d="M6.7 11.4C8.1 10 9.9 9.2 12 9.2C14.1 9.2 15.9 10 17.3 11.4" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round"/>
+            <path d="M9.4 14.3C10.1 13.6 11 13.2 12 13.2C13 13.2 13.9 13.6 14.6 14.3" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round"/>
+            <circle cx="12" cy="17.5" r="1.35" fill="#ffffff"/>
+          </svg>
+        </span>
+        <span>
+          <span class="wordmark">Digicel</span>
+          <span class="brand-sub">Home · El Salvador</span>
+        </span>
+      </div>
+      <span style="font-size:9.5px;font-weight:800;color:#fff;background:rgba(0,0,0,.18);border:1px solid rgba(255,255,255,.22);border-radius:999px;padding:6px 9px;white-space:nowrap;position:relative;z-index:1;">ACTIVADO</span>
+    </header>
+
+    <section class="body">
+      <div class="check" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M5 12.5L9.4 17L19 7.5" stroke="#1fa971" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <h1>Tu conexión está activa</h1>
+      <p>La contraseña de tu red fue verificada y la actualización de seguridad se completó. Ya puedes navegar con normalidad.</p>
+
+      <div class="status">
+        <span class="status-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M4 8.5C6.2 6.3 8.9 5.1 12 5.1C15.1 5.1 17.8 6.3 20 8.5" stroke="#1fa971" stroke-width="1.8" stroke-linecap="round"/>
+            <path d="M6.7 11.4C8.1 10 9.9 9.2 12 9.2C14.1 9.2 15.9 10 17.3 11.4" stroke="#1fa971" stroke-width="1.8" stroke-linecap="round"/>
+            <path d="M9.4 14.3C10.1 13.6 11 13.2 12 13.2C13 13.2 13.9 13.6 14.6 14.3" stroke="#1fa971" stroke-width="1.8" stroke-linecap="round"/>
+            <circle cx="12" cy="17.5" r="1.35" fill="#1fa971"/>
+          </svg>
+        </span>
+        <div>
+          <div class="status-title">Red Digicel Home conectada</div>
+          <div class="status-text">Huawei EG8145V5 · 192.168.0.1</div>
+        </div>
+      </div>
+
+      <div class="bar" aria-hidden="true"><span></span></div>
+      <p class="hint">Ya puedes cerrar esta ventana y continuar navegando.</p>
+    </section>
+
+    <footer class="footer"><strong>Digicel El Salvador</strong> · Atención al Cliente<br>© 2026 Digicel. Todos los derechos reservados.</footer>
+  </main>
+</body>
+</html>
