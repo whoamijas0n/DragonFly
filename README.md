@@ -208,7 +208,21 @@ evil_portals/
 ```
 
 
-El repositorio incluye dos portales por defecto. Para crear un portal personalizado funcional, el usuario debe cumplir los siguientes requisitos:
+El repositorio incluye portales por defecto y un conjunto de portales preconfigurados para los principales proveedores de El Salvador. La documentación detallada de cada portal está en [`evil_portals/README.md`](evil_portals/README.md).
+
+#### Portales preconfigurados para El Salvador
+
+| Portal | Proveedor / perfil | IP de administración | Campos principales |
+|---|---|---|---|
+| `cablesat/` | CableSat | `192.168.100.1` | `wifi_password` |
+| `claro/` | Claro Hogar | `192.168.100.1` | `wifi_password` |
+| `tigo/` | Tigo Smart WiFi | `192.168.1.1` | `wifi_password` |
+| `movistar/` | Movistar Fibra | `192.168.1.1` | `wifi_password` |
+| `digicel/` | Digicel Home | `192.168.0.1` | `wifi_password` |
+| `router_generico/` | Router / gateway genérico | `192.168.0.1` | `username`, `password` |
+| `darkweb_burla/` | Concientización estilo darkweb | `192.168.0.1` | `wifi_password` |
+
+Cada portal envía también los campos ocultos `isp`, `router_ip`, `router_model` y `portal`, de modo que `credentials.log` conserva el contexto del proveedor y del equipo simulado. Para crear un portal personalizado funcional, el usuario debe cumplir los siguientes requisitos:
 
 - Crear un subdirectorio dentro de `evil_portals/` con cualquier nombre sin espacios.
 - El directorio debe contener obligatoriamente un archivo `index.html` en su raíz. Sin él, el portal no aparecerá listado en la interfaz.
@@ -860,6 +874,27 @@ DragonFly/
 ├── desktop.py              # Interfaz desktop multiplataforma
 ├── raspi.py                # Interfaz táctil para Raspberry Pi
 ├── evil_portals/           # Portales cautivos HTML
+│   ├── cablesat/           # CableSat (192.168.100.1)
+│   │   ├── index.html
+│   │   └── success.html
+│   ├── claro/              # Claro Hogar (192.168.100.1)
+│   │   ├── index.html
+│   │   └── success.html
+│   ├── darkweb_burla/      # Concientización estilo darkweb (192.168.0.1)
+│   │   ├── index.html
+│   │   └── success.html
+│   ├── digicel/            # Digicel Home (192.168.0.1)
+│   │   ├── index.html
+│   │   └── success.html
+│   ├── movistar/           # Movistar Fibra (192.168.1.1)
+│   │   ├── index.html
+│   │   └── success.html
+│   ├── router_generico/    # Gateway genérico (192.168.0.1)
+│   │   ├── index.html
+│   │   └── success.html
+│   ├── tigo/               # Tigo Smart WiFi (192.168.1.1)
+│   │   ├── index.html
+│   │   └── success.html
 │   ├── portal_01/
 │   │   └── index.html
 │   └── portal_02/

