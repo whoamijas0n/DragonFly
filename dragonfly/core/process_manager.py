@@ -44,11 +44,11 @@ class ProcessManager:
             self.terminate_proc(name, timeout=timeout)
 
     @staticmethod
-    def pkill(pattern: str):
-        """Mata procesos usando pkill (SIGTERM). Usa -f solo para scripts o patrones con espacios."""
+    def pkill(pattern: str, full: bool = False):
+        """Mata procesos usando pkill (SIGTERM). Usa -f para scripts, rutas o patrones con espacios."""
         try:
             cmd = ["sudo", "pkill"]
-            if " " in pattern or pattern.endswith(".py"):
+            if full or " " in pattern or pattern.endswith((".py", ".conf")):
                 cmd.append("-f")
             cmd.append(pattern)
             safe_run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -56,11 +56,11 @@ class ProcessManager:
             pass
 
     @staticmethod
-    def pkill_force(pattern: str):
+    def pkill_force(pattern: str, full: bool = False):
         """Mata procesos forzosamente con SIGKILL (-9)."""
         try:
             cmd = ["sudo", "pkill", "-9"]
-            if " " in pattern or pattern.endswith(".py"):
+            if full or " " in pattern or pattern.endswith((".py", ".conf")):
                 cmd.append("-f")
             cmd.append(pattern)
             safe_run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

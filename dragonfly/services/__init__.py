@@ -32,7 +32,7 @@ class ServiceContainer:
         self.mac = MacService(executor=self.executor)
         self.wifi = WiFiService(executor=self.executor, process_manager=self.pm)
         self.wifi_audit = WiFiAuditService(wifi_service=self.wifi)
-        self.evil_twin = EvilTwinService(process_manager=self.pm)
+        self.evil_twin = EvilTwinService(process_manager=self.pm, wifi_service=self.wifi)
         self.jammer = JammerService()
         self.sub1ghz = Sub1GHzService()
         self.ducky = DuckyService()

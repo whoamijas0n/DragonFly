@@ -17,7 +17,11 @@ from tkinter import ttk
 from dragonfly.ui.raspi.views.base_view import BaseView
 from dragonfly.ui.raspi.widgets import ScrollableFrame
 from dragonfly.config import BASE_DIR_WIFI, BASE_DIR_EVIL, BASE_DIR_CLIENTS, BASE_DIR_WIFI_AUDIT
-from dragonfly.core.hardware import get_wifi_interfaces, get_network_interfaces
+from dragonfly.core.wifi_interfaces import (
+    get_deauth_interfaces,
+    get_evil_twin_ap_interfaces,
+    get_monitor_interfaces,
+)
 from dragonfly.services.wifi_audit_service import (
     format_network_compact,
     format_network_detail,
@@ -87,9 +91,9 @@ class WiFiView(BaseView):
         self.add_back_button(self.render)
         ttk.Label(self.main_frame, text="ENUMERAR CLIENTES", style='Title.TLabel').pack(pady=2)
 
-        interfaces = get_wifi_interfaces()
+        interfaces = get_monitor_interfaces(unique_phys=True)
         if not interfaces:
-            ttk.Label(self.main_frame, text="No hay interfaces WiFi.", style='Dark.TLabel').pack(pady=10)
+            ttk.Label(self.main_frame, text="No hay interfaces con modo monitor.", style='Dark.TLabel').pack(pady=10)
             self.show_console()
             return
 
@@ -113,7 +117,7 @@ class WiFiView(BaseView):
         scroll.pack(fill='both', expand=True, padx=2, pady=2)
 
         self.client_iface_btns = []
-        for iface in get_wifi_interfaces():
+        for iface in get_monitor_interfaces(unique_phys=True):
             btn = scroll.add_button(
                 text=iface,
                 command=lambda i=iface: self._flow_client_scan(i, mode='single'),
@@ -138,7 +142,7 @@ class WiFiView(BaseView):
         self.wifi_state.setdefault("dual_client", {})["selected"] = []
         self.wifi_state["dual_client"]["btns"] = []
 
-        for iface in get_wifi_interfaces():
+        for iface in get_monitor_interfaces(unique_phys=True):
             btn = scroll.add_button(
                 text=iface,
                 command=lambda i=iface: self._flow_client_dual_add(i),
@@ -178,24 +182,27 @@ class WiFiView(BaseView):
         self.wifi_state["iface_5g"] = iface_5g
 
         def worker():
-            mon_2g = self.services.wifi.enable_monitor_mode(iface)
-            self.wifi_state["mon_iface_2g"] = mon_2g
+            try:
+                mon_2g = self.services.wifi.enable_monitor_mode(iface)
+                self.wifi_state["mon_iface_2g"] = mon_2g
 
-            mon_5g = None
-            if mode == 'dual' and iface_5g:
-                mon_5g = self.services.wifi.enable_monitor_mode(iface_5g)
-                self.wifi_state["mon_iface_5g"] = mon_5g
+                mon_5g = None
+                if mode == 'dual' and iface_5g:
+                    mon_5g = self.services.wifi.enable_monitor_mode(iface_5g)
+                    self.wifi_state["mon_iface_5g"] = mon_5g
 
-            self.run_on_ui(lambda: self.write_console(f"[*] Escaneando espectro (20s)..."))
+                self.run_on_ui(lambda: self.write_console(f"[*] Escaneando espectro (20s)..."))
 
-            if mode == 'dual' and mon_5g:
-                redes_unicas, iface_map = self.services.wifi.scan_networks_dual(mon_2g, mon_5g, duration=20)
-            else:
-                redes = self.services.wifi.scan_networks(mon_2g, duration=20)
-                redes_unicas = list({v['bssid']: v for v in redes}.values())
-                iface_map = {r['bssid']: mon_2g for r in redes_unicas}
+                if mode == 'dual' and mon_5g:
+                    redes_unicas, iface_map = self.services.wifi.scan_networks_dual(mon_2g, mon_5g, duration=20)
+                else:
+                    redes = self.services.wifi.scan_networks(mon_2g, duration=20)
+                    redes_unicas = list({v['bssid']: v for v in redes}.values())
+                    iface_map = {r['bssid']: mon_2g for r in redes_unicas}
 
-            self.run_on_ui(lambda: self._flow_client_show_networks(redes_unicas, iface_map))
+                self.run_on_ui(lambda: self._flow_client_show_networks(redes_unicas, iface_map))
+            except Exception as exc:
+                self._flow_worker_error("ERROR DE MONITOR", exc, self._flow_client_list)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -300,9 +307,12 @@ class WiFiView(BaseView):
         self.write_console("[*] Iniciando enumeración dual (30s)...")
 
         def worker():
-            resultados = self.services.wifi.scan_clients_dual(selected, duration=30)
-            self.services.wifi.save_client_results(resultados, is_dual=True)
-            self.run_on_ui(lambda: self._flow_client_dual_show_results(resultados))
+            try:
+                resultados = self.services.wifi.scan_clients_dual(selected, duration=30)
+                self.services.wifi.save_client_results(resultados, is_dual=True)
+                self.run_on_ui(lambda: self._flow_client_dual_show_results(resultados))
+            except Exception as exc:
+                self._flow_worker_error("ERROR DE ENUMERACIÓN", exc, self._flow_client_list)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -373,8 +383,11 @@ class WiFiView(BaseView):
         self.write_console(f"[*] Recopilando MACs pasivamente (30s)...")
 
         def worker():
-            clientes = self.services.wifi.scan_clients_passive(iface_mon, red['bssid'], red['ch'], duration=30)
-            self.run_on_ui(lambda: self._flow_client_show_results(clientes, red))
+            try:
+                clientes = self.services.wifi.scan_clients_passive(iface_mon, red['bssid'], red['ch'], duration=30)
+                self.run_on_ui(lambda: self._flow_client_show_results(clientes, red))
+            except Exception as exc:
+                self._flow_worker_error("ERROR DE ENUMERACIÓN", exc, self._flow_client_list)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -425,6 +438,26 @@ class WiFiView(BaseView):
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def _flow_worker_error(self, title, message, back_callback):
+        """Muestra un error de un worker sin dejar la pantalla bloqueada."""
+        message = str(message) or "Error desconocido."
+
+        def show():
+            self.clear_frame()
+            self.add_back_button(back_callback)
+            ttk.Label(self.main_frame, text=title, style='Title.TLabel').pack(pady=2)
+            ttk.Label(
+                self.main_frame,
+                text=message,
+                style='Mono.TLabel',
+                justify='left',
+                wraplength=290,
+            ).pack(padx=8, pady=10)
+            self.show_console()
+            self.write_console(f"[!] {message}")
+
+        self.run_on_ui(show)
+
     # =========================================================================
     # 2. CAPTURA HANDSHAKE
     # =========================================================================
@@ -436,9 +469,9 @@ class WiFiView(BaseView):
         scroll = ScrollableFrame(self.main_frame, max_items=10)
         scroll.pack(fill='both', expand=True, padx=2, pady=2)
 
-        interfaces = get_wifi_interfaces()
+        interfaces = get_monitor_interfaces(unique_phys=True)
         if not interfaces:
-            ttk.Label(scroll.scrollable_frame, text="No hay interfaces Wi-Fi.", style='Dark.TLabel').pack()
+            ttk.Label(scroll.scrollable_frame, text="No hay interfaces con modo monitor.", style='Dark.TLabel').pack()
             self.show_console(parent=scroll.scrollable_frame)
             return
 
@@ -465,11 +498,14 @@ class WiFiView(BaseView):
         self.write_console(f"[*] Preparando modo monitor en {iface}...")
 
         def worker():
-            mon = self.services.wifi.enable_monitor_mode(iface)
-            self.wifi_state["mon_iface"] = mon
-            self.run_on_ui(lambda: self.write_console(f"[*] Escaneando 15s en {mon}..."))
-            redes = self.services.wifi.scan_networks(mon, duration=15)
-            self.run_on_ui(lambda: self._flow_handshake_show_networks(redes))
+            try:
+                mon = self.services.wifi.enable_monitor_mode(iface)
+                self.wifi_state["mon_iface"] = mon
+                self.run_on_ui(lambda: self.write_console(f"[*] Escaneando 15s en {mon}..."))
+                redes = self.services.wifi.scan_networks(mon, duration=15)
+                self.run_on_ui(lambda: self._flow_handshake_show_networks(redes))
+            except Exception as exc:
+                self._flow_worker_error("ERROR DE MONITOR", exc, self._flow_handshake_start)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -508,7 +544,15 @@ class WiFiView(BaseView):
 
         def worker():
             mon = self.wifi_state["mon_iface"]
-            clientes = self.services.wifi.scan_clients(mon, red['bssid'], red['ch'], duration=10)
+            try:
+                clientes = self.services.wifi.scan_clients(mon, red['bssid'], red['ch'], duration=10)
+            except Exception as exc:
+                self._flow_worker_error(
+                    "ERROR DE ESCANEO",
+                    exc,
+                    lambda: self._flow_handshake_show_networks([red]),
+                )
+                return
 
             def on_back_handshake():
                 if self.wifi_state.get("handshake_capturing"):
@@ -659,9 +703,14 @@ class WiFiView(BaseView):
         scroll = ScrollableFrame(self.main_frame, max_items=10)
         scroll.pack(fill='both', expand=True, padx=2, pady=2)
 
-        interfaces = get_network_interfaces()
-        if len(interfaces) < 2:
-            ttk.Label(scroll.scrollable_frame, text="Requiere al menos 2 interfaces.", style='Dark.TLabel').pack(pady=10)
+        interfaces = get_evil_twin_ap_interfaces()
+        if not interfaces:
+            ttk.Label(
+                scroll.scrollable_frame,
+                text="Se requieren 2 radios WiFi:\nuna para el AP y otra para deauth.",
+                style='Mono.TLabel',
+                justify='center',
+            ).pack(pady=10)
             self.show_console(parent=scroll.scrollable_frame)
             return
 
@@ -693,7 +742,15 @@ class WiFiView(BaseView):
         scroll.pack(fill='both', expand=True, padx=2, pady=2)
 
         self.evil_deauth_btns = []
-        for iface in [i for i in get_network_interfaces() if i != ap_iface]:
+        deauth_ifaces = get_deauth_interfaces(ap_iface)
+        if not deauth_ifaces:
+            ttk.Label(
+                scroll.scrollable_frame,
+                text="No hay otra radio con modo monitor\npara lanzar el deauth.",
+                style='Mono.TLabel',
+                justify='center',
+            ).pack(pady=10)
+        for iface in deauth_ifaces:
             btn = scroll.add_button(
                 text=iface,
                 command=lambda i=iface: self._flow_evil_twin_scan(i),
@@ -715,11 +772,18 @@ class WiFiView(BaseView):
         self.write_console(f"[*] Preparando interfaces para Evil Twin...")
 
         def worker():
-            mon = self.services.wifi.enable_monitor_mode(deauth_iface)
-            self.wifi_state["mon_deauth"] = mon
-            self.run_on_ui(lambda: self.write_console(f"[*] Escaneando redes en {mon}..."))
-            redes = self.services.wifi.scan_networks(mon, duration=15)
-            self.run_on_ui(lambda: self._flow_evil_twin_show_networks(redes))
+            try:
+                mon = self.services.wifi.enable_monitor_mode(deauth_iface)
+                self.wifi_state["mon_deauth"] = mon
+                self.run_on_ui(lambda: self.write_console(f"[*] Escaneando redes en {mon}..."))
+                redes = self.services.wifi.scan_networks(mon, duration=15)
+                self.run_on_ui(lambda: self._flow_evil_twin_show_networks(redes))
+            except Exception as exc:
+                self._flow_worker_error(
+                    "ERROR DE MONITOR",
+                    exc,
+                    self._flow_evil_twin_start,
+                )
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -783,8 +847,8 @@ class WiFiView(BaseView):
             width=28
         )
 
-        interfaces = get_network_interfaces()
-        if len(interfaces) >= 3:
+        deauth_ifaces = get_deauth_interfaces(self.wifi_state.get("ap_iface", ""))
+        if len(deauth_ifaces) >= 2:
             scroll.add_button(
                 text="Deauth Dual-band",
                 command=lambda: self._flow_evil_twin_dual_select_ifaces(red, portal),
@@ -794,7 +858,7 @@ class WiFiView(BaseView):
         else:
             btn = ttk.Button(
                 scroll.scrollable_frame,
-                text="Deauth Dual-band (requiere 3 ifaces)",
+                text="Deauth Dual-band (requiere 2 radios deauth)",
                 style='Gray.TButton',
                 state='disabled'
             )
@@ -837,18 +901,25 @@ class WiFiView(BaseView):
         self.write_console("[*] Rastreando clientes asociados (10s)...")
 
         def worker():
-            mon = self.wifi_state.get("mon_deauth")
-            if not mon:
-                deauth_iface = self.wifi_state.get("deauth_iface")
-                if deauth_iface:
-                    mon = self.services.wifi.enable_monitor_mode(deauth_iface)
-                    self.wifi_state["mon_deauth"] = mon
-            if not mon:
-                self.run_on_ui(lambda: self._flow_evil_twin_show_clients(
-                    red, portal, [], error="No hay interfaz en modo monitor."))
-                return
-            clientes = self.services.wifi.scan_clients(mon, red['bssid'], red['ch'], duration=10)
-            self.run_on_ui(lambda: self._flow_evil_twin_show_clients(red, portal, clientes))
+            try:
+                mon = self.wifi_state.get("mon_deauth")
+                if not mon:
+                    deauth_iface = self.wifi_state.get("deauth_iface")
+                    if deauth_iface:
+                        mon = self.services.wifi.enable_monitor_mode(deauth_iface)
+                        self.wifi_state["mon_deauth"] = mon
+                if not mon:
+                    self.run_on_ui(lambda: self._flow_evil_twin_show_clients(
+                        red, portal, [], error="No hay interfaz en modo monitor."))
+                    return
+                clientes = self.services.wifi.scan_clients(mon, red['bssid'], red['ch'], duration=10)
+                self.run_on_ui(lambda: self._flow_evil_twin_show_clients(red, portal, clientes))
+            except Exception as exc:
+                self._flow_worker_error(
+                    "ERROR DE ESCANEO",
+                    exc,
+                    lambda: self._flow_evil_twin_single_mode(red, portal),
+                )
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -922,8 +993,17 @@ class WiFiView(BaseView):
         )
         self.show_console(parent=scroll.scrollable_frame)
 
-        ap_iface = self.wifi_state["ap_iface"]
-        mon_deauth = self.wifi_state["mon_deauth"]
+        ap_iface = self.wifi_state.get("ap_iface")
+        mon_deauth = self.wifi_state.get("mon_deauth")
+        if not ap_iface:
+            self._flow_worker_error(
+                "ERROR EVIL TWIN",
+                "No hay interfaz AP seleccionada.",
+                self._flow_evil_twin_start,
+            )
+            return
+        if not mon_deauth:
+            self.write_console("[!] Sin interfaz de monitor: el AP arrancará sin deauth.")
 
         if deauth_mode == "directed" and cliente_mac:
             self.write_console(f"[*] Deauth dirigido al cliente: {cliente_mac}")
@@ -950,7 +1030,7 @@ class WiFiView(BaseView):
         ttk.Label(self.main_frame, text="SELEC. 2 IFACES DEAUTH", style='Title.TLabel').pack(pady=2)
 
         ap_iface = self.wifi_state.get("ap_iface")
-        ifaces_disp = [i for i in get_network_interfaces() if i != ap_iface]
+        ifaces_disp = get_deauth_interfaces(ap_iface) if ap_iface else []
 
         scroll = ScrollableFrame(self.main_frame, max_items=10)
         scroll.pack(fill='both', expand=True, padx=2, pady=2)
@@ -996,14 +1076,21 @@ class WiFiView(BaseView):
         self.wifi_state["dual_evil"]["deauth_iface2"] = iface2
 
         def worker():
-            mon1 = self.services.wifi.enable_monitor_mode(iface1)
-            mon2 = self.services.wifi.enable_monitor_mode(iface2)
-            self.wifi_state["dual_evil"]["mon1"] = mon1
-            self.wifi_state["dual_evil"]["mon2"] = mon2
+            try:
+                mon1 = self.services.wifi.enable_monitor_mode(iface1)
+                mon2 = self.services.wifi.enable_monitor_mode(iface2)
+                self.wifi_state["dual_evil"]["mon1"] = mon1
+                self.wifi_state["dual_evil"]["mon2"] = mon2
 
-            self.run_on_ui(lambda: self.write_console(f"[*] Escaneando con {mon1} (15s)..."))
-            redes = self.services.wifi.scan_networks(mon1, duration=15)
-            self.run_on_ui(lambda: self._flow_evil_twin_dual_show_networks(redes, red, portal))
+                self.run_on_ui(lambda: self.write_console(f"[*] Escaneando con {mon1} (15s)..."))
+                redes = self.services.wifi.scan_networks(mon1, duration=15)
+                self.run_on_ui(lambda: self._flow_evil_twin_dual_show_networks(redes, red, portal))
+            except Exception as exc:
+                self._flow_worker_error(
+                    "ERROR DE MONITOR",
+                    exc,
+                    lambda: self._flow_evil_twin_dual_select_ifaces(red, portal),
+                )
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1099,9 +1186,16 @@ class WiFiView(BaseView):
         )
         self.show_console(parent=scroll.scrollable_frame)
 
-        ap_iface = self.wifi_state["ap_iface"]
-        mon1 = self.wifi_state["dual_evil"]["mon1"]
-        mon2 = self.wifi_state["dual_evil"]["mon2"]
+        ap_iface = self.wifi_state.get("ap_iface")
+        mon1 = self.wifi_state.get("dual_evil", {}).get("mon1")
+        mon2 = self.wifi_state.get("dual_evil", {}).get("mon2")
+        if not ap_iface or not mon1 or not mon2:
+            self._flow_worker_error(
+                "ERROR EVIL TWIN DUAL",
+                "Faltan interfaces AP o deauth.",
+                self.render,
+            )
+            return
 
         def on_cred(line):
             self.write_console(f"[!] CREDENCIAL: {line}")
@@ -1124,8 +1218,12 @@ class WiFiView(BaseView):
             self.btn_detener_evil.config(style='Gray.TButton')
             self.btn_detener_evil.state(['disabled'])
 
-        self.services.evil_twin.stop_evil_twin()
-        self.app.after(3000, self.render)
+        def stopper():
+            self.services.evil_twin.stop_evil_twin()
+            self.services.evil_twin.wait_until_stopped(timeout=25)
+            self.run_on_ui(self.render)
+
+        threading.Thread(target=stopper, daemon=True).start()
 
     # =========================================================================
     # 4. ATAQUE DEAUTH (SINGLE & DUAL-BAND)
@@ -1155,7 +1253,14 @@ class WiFiView(BaseView):
         scroll.pack(fill='both', expand=True, padx=2, pady=2)
 
         self.deauth_iface_btns = []
-        for iface in get_wifi_interfaces():
+        monitor_ifaces = get_monitor_interfaces(unique_phys=True)
+        if not monitor_ifaces:
+            ttk.Label(
+                scroll.scrollable_frame,
+                text="No hay interfaces con modo monitor.",
+                style='Dark.TLabel',
+            ).pack(pady=10)
+        for iface in monitor_ifaces:
             btn = scroll.add_button(
                 text=iface,
                 command=lambda i=iface: self._flow_deauth_single_scan(i),
@@ -1177,11 +1282,14 @@ class WiFiView(BaseView):
         self.write_console(f"[*] Preparando modo monitor para Deauth en {iface}...")
 
         def worker():
-            mon = self.services.wifi.enable_monitor_mode(iface)
-            self.wifi_state["mon_iface"] = mon
-            self.run_on_ui(lambda: self.write_console(f"[*] Escaneando objetivos..."))
-            redes = self.services.wifi.scan_networks(mon, duration=15)
-            self.run_on_ui(lambda: self._flow_deauth_single_show_networks(redes))
+            try:
+                mon = self.services.wifi.enable_monitor_mode(iface)
+                self.wifi_state["mon_iface"] = mon
+                self.run_on_ui(lambda: self.write_console(f"[*] Escaneando objetivos..."))
+                redes = self.services.wifi.scan_networks(mon, duration=15)
+                self.run_on_ui(lambda: self._flow_deauth_single_show_networks(redes))
+            except Exception as exc:
+                self._flow_worker_error("ERROR DE MONITOR", exc, self._flow_deauth_single_start)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1242,7 +1350,15 @@ class WiFiView(BaseView):
 
         def worker():
             mon = self.wifi_state["mon_iface"]
-            clientes = self.services.wifi.scan_clients(mon, red['bssid'], red['ch'], duration=10)
+            try:
+                clientes = self.services.wifi.scan_clients(mon, red['bssid'], red['ch'], duration=10)
+            except Exception as exc:
+                self._flow_worker_error(
+                    "ERROR DE ESCANEO",
+                    exc,
+                    lambda: self._flow_deauth_single_select_mode(red),
+                )
+                return
 
             def actualizar_gui():
                 self.clear_frame()
@@ -1317,13 +1433,20 @@ class WiFiView(BaseView):
         )
         self.show_console(parent=scroll.scrollable_frame)
 
-        self.services.wifi.start_deauth_attack(
-            mon_iface=mon,
-            target_red=red,
-            cliente_mac=cliente,
-            count=count,
-            on_output=self.write_console
-        )
+        try:
+            self.services.wifi.start_deauth_attack(
+                mon_iface=mon,
+                target_red=red,
+                cliente_mac=cliente,
+                count=count,
+                on_output=self.write_console
+            )
+        except Exception as exc:
+            self._flow_worker_error(
+                "ERROR DE DEAUTH",
+                exc,
+                lambda: self._flow_deauth_single_select_mode(red),
+            )
 
     # --- DUAL-BAND DEAUTH ---
     def _flow_deauth_dual_start(self):
@@ -1331,12 +1454,12 @@ class WiFiView(BaseView):
         self.add_back_button(self._flow_deauth_menu)
         ttk.Label(self.main_frame, text="DEAUTH DUAL‑BAND", style='Title.TLabel').pack(pady=2)
 
-        interfaces = get_network_interfaces()
+        interfaces = get_monitor_interfaces(unique_phys=True)
         if len(interfaces) < 2:
-            ttk.Label(self.main_frame, text="Se necesitan al menos 2 interfaces físicas.",
+            ttk.Label(self.main_frame, text="Se necesitan 2 radios con modo monitor.",
                       style='Dark.TLabel', foreground=COLOR_TEXTO_ADVERTENCIA).pack(pady=10)
             self.show_console()
-            self.write_console("[!] No hay suficientes interfaces para ataque dual.")
+            self.write_console("[!] No hay suficientes interfaces monitor para ataque dual.")
             return
 
         self.wifi_state.setdefault("dual_deauth", {})["selected"] = []
@@ -1386,14 +1509,17 @@ class WiFiView(BaseView):
         self.wifi_state["dual_deauth"]["iface2"] = iface2
 
         def worker():
-            mon1 = self.services.wifi.enable_monitor_mode(iface1)
-            mon2 = self.services.wifi.enable_monitor_mode(iface2)
-            self.wifi_state["dual_deauth"]["mon1"] = mon1
-            self.wifi_state["dual_deauth"]["mon2"] = mon2
+            try:
+                mon1 = self.services.wifi.enable_monitor_mode(iface1)
+                mon2 = self.services.wifi.enable_monitor_mode(iface2)
+                self.wifi_state["dual_deauth"]["mon1"] = mon1
+                self.wifi_state["dual_deauth"]["mon2"] = mon2
 
-            self.run_on_ui(lambda: self.write_console(f"[*] Escaneando con {mon1} (15 s)..."))
-            redes = self.services.wifi.scan_networks(mon1, duration=15)
-            self.run_on_ui(lambda: self._flow_deauth_dual_show_networks(redes))
+                self.run_on_ui(lambda: self.write_console(f"[*] Escaneando con {mon1} (15 s)..."))
+                redes = self.services.wifi.scan_networks(mon1, duration=15)
+                self.run_on_ui(lambda: self._flow_deauth_dual_show_networks(redes))
+            except Exception as exc:
+                self._flow_worker_error("ERROR DE MONITOR", exc, self._flow_deauth_dual_start)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1533,7 +1659,10 @@ class WiFiView(BaseView):
         )
         self.show_console(parent=scroll.scrollable_frame)
 
-        self.services.wifi.start_dual_deauth(mon1, mon2, red1, red2, burst=burst, callback=self.write_console)
+        try:
+            self.services.wifi.start_dual_deauth(mon1, mon2, red1, red2, burst=burst, callback=self.write_console)
+        except Exception as exc:
+            self._flow_worker_error("ERROR DE DEAUTH DUAL", exc, self._flow_deauth_dual_start)
 
     # =========================================================================
     # 8. RECONOCIMIENTO WIFI (WIFI AUDIT 2.0 - V1)
@@ -1620,9 +1749,9 @@ class WiFiView(BaseView):
         self.add_back_button(self._flow_audit_menu)
         ttk.Label(self.main_frame, text="SINGLE-BAND: IFACE", style='Title.TLabel').pack(pady=2)
 
-        interfaces = get_wifi_interfaces()
+        interfaces = get_monitor_interfaces(unique_phys=True)
         if not interfaces:
-            ttk.Label(self.main_frame, text="No hay interfaces WiFi.", style='Dark.TLabel').pack(pady=10)
+            ttk.Label(self.main_frame, text="No hay interfaces con modo monitor.", style='Dark.TLabel').pack(pady=10)
             self.show_console()
             return
 
@@ -1666,14 +1795,14 @@ class WiFiView(BaseView):
         self.show_console(parent=scroll.scrollable_frame)
 
     def _flow_audit_dual_select_ifaces(self):
-        interfaces = get_wifi_interfaces()
+        interfaces = get_monitor_interfaces(unique_phys=True)
         if len(interfaces) < 2:
             self.clear_frame()
             self.add_back_button(self._flow_audit_menu)
             ttk.Label(self.main_frame, text="DUAL-BAND", style='Title.TLabel').pack(pady=2)
             ttk.Label(
                 self.main_frame,
-                text="Se requieren 2 interfaces WiFi independientes:\n"
+                text="Se requieren 2 radios WiFi independientes\ncon modo monitor:\n"
                      "1 para 2.4 GHz y 1 para 5 GHz.",
                 style='Mono.TLabel',
                 justify='left',
