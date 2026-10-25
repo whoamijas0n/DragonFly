@@ -17,7 +17,12 @@ import shutil
 import subprocess
 
 from dragonfly.core.hardware import get_wifi_interfaces
-from dragonfly.core.routing import find_upstream
+from dragonfly.core.routing import (
+    find_upstream,
+    get_default_routes,
+    get_dns_servers,
+    get_interface_ipv4,
+)
 from dragonfly.core.subprocess_utils import safe_run
 
 # Rutas habituales cuando ``iw`` no está en el PATH del proceso (p. ej. la app
@@ -294,40 +299,97 @@ def get_supported_bands(iface: str) -> dict:
     return parse_supported_bands(result.stdout or "")
 
 
+def get_internet_upstream_options(ap_iface: str) -> list[dict]:
+    """
+    Salidas a Internet que el operador puede asignar a un AP concreto.
+
+    Se listan todas las interfaces con ruta por defecto e IPv4, excepto la
+    propia interfaz AP y cualquier vif de su misma radio. El orden respeta la
+    métrica de la ruta, pero la UI permite elegir cualquiera.
+    """
+    options = []
+    seen = set()
+    routes = sorted(
+        get_default_routes(),
+        key=lambda item: (item.get("metric", 0), item.get("iface") or ""),
+    )
+    for route in routes:
+        iface = route.get("iface")
+        if not iface or iface in seen or iface == ap_iface:
+            continue
+        if share_phy(ap_iface, iface):
+            continue
+        interface = get_interface_ipv4(iface)
+        if interface is None:
+            continue
+        seen.add(iface)
+        options.append({
+            **route,
+            "ip": str(interface.ip),
+            "cidr": str(interface),
+            "network": str(interface.network),
+            "dns": get_dns_servers(iface),
+        })
+    return options
+
+
+def get_internet_ap_interfaces() -> list[dict]:
+    """Radios que pueden ser AP y tienen al menos un upstream seleccionable."""
+    result = []
+    for ap_iface in get_ap_interfaces(unique_phys=True):
+        upstreams = get_internet_upstream_options(ap_iface)
+        if not upstreams:
+            continue
+        result.append({
+            "ap_iface": ap_iface,
+            "bands": get_supported_bands(ap_iface),
+            "upstreams": upstreams,
+        })
+    return result
+
+
+def build_internet_candidate(ap_iface: str, upstream: dict | None) -> dict | None:
+    """Construye una combinación AP/upstream ya validada."""
+    if not ap_iface or not upstream:
+        return None
+    upstream_iface = upstream.get("iface")
+    if not upstream_iface or upstream_iface == ap_iface:
+        return None
+    if share_phy(ap_iface, upstream_iface):
+        return None
+
+    monitors = []
+    for iface in get_monitor_interfaces(unique_phys=True):
+        if iface in (ap_iface, upstream_iface):
+            continue
+        if share_phy(iface, ap_iface) or share_phy(iface, upstream_iface):
+            continue
+        monitors.append(iface)
+
+    return {
+        "ap_iface": ap_iface,
+        "upstream": dict(upstream),
+        "monitor_ifaces": monitors,
+        "bands": get_supported_bands(ap_iface),
+        "single_deauth": bool(monitors),
+        "dual_deauth": len(monitors) >= 2,
+    }
+
+
 def get_internet_ap_candidates() -> list[dict]:
     """
-    Combinaciones viables para un AP con salida a Internet.
+    Combinaciones por defecto para un AP con salida a Internet.
 
-    Para cada interfaz que puede hacer AP se busca un upstream distinto y se
-    calculan las radios monitor libres. La misma radio no se usa para AP y STA
-    porque en esta plataforma la concurrencia anunciada por ``brcmfmac`` no
-    llega a emitir un AP real. La lista queda ordenada por nombre de interfaz.
+    Para cada interfaz que puede hacer AP se busca el mejor upstream distinto y
+    se calculan las radios monitor libres. La UI puede sustituir el upstream
+    por cualquiera de ``get_internet_upstream_options()``.
     """
     candidates = []
     for ap_iface in get_ap_interfaces(unique_phys=True):
         upstream = find_upstream(ap_iface=ap_iface)
-        if not upstream:
-            continue
-        upstream_iface = upstream.get("iface")
-        if not upstream_iface or share_phy(ap_iface, upstream_iface):
-            continue
-
-        monitors = []
-        for iface in get_monitor_interfaces(unique_phys=True):
-            if iface in (ap_iface, upstream_iface):
-                continue
-            if share_phy(iface, ap_iface) or share_phy(iface, upstream_iface):
-                continue
-            monitors.append(iface)
-
-        candidates.append({
-            "ap_iface": ap_iface,
-            "upstream": upstream,
-            "monitor_ifaces": monitors,
-            "bands": get_supported_bands(ap_iface),
-            "single_deauth": bool(monitors),
-            "dual_deauth": len(monitors) >= 2,
-        })
+        candidate = build_internet_candidate(ap_iface, upstream)
+        if candidate:
+            candidates.append(candidate)
     return candidates
 
 

@@ -65,20 +65,33 @@ class SsidValidationTest(unittest.TestCase):
 
 
 class UpstreamResolutionTest(unittest.TestCase):
-    def test_prefers_current_default_route(self):
+    def test_honors_explicit_requested_interface(self):
+        service = EvilTwinService()
+        requested = {"iface": "wlan1", "ip": "192.168.1.48"}
+        with mock.patch(
+            "dragonfly.services.evil_twin_service.get_upstream_info_for_iface",
+            return_value=requested,
+        ), mock.patch(
+            "dragonfly.services.evil_twin_service.find_upstream",
+        ) as fallback:
+            route = service._resolve_upstream("wlan0", "wlan1")
+        self.assertEqual(route["iface"], "wlan1")
+        fallback.assert_not_called()
+
+    def test_uses_best_route_without_explicit_selection(self):
         service = EvilTwinService()
         with mock.patch(
             "dragonfly.services.evil_twin_service.find_upstream",
             return_value={"iface": "wlan0", "ip": "192.168.1.222"},
         ):
-            route = service._resolve_upstream("wlan1", "wlan1")
+            route = service._resolve_upstream("wlan1", None)
         self.assertEqual(route["iface"], "wlan0")
 
     def test_falls_back_to_requested_interface_without_default(self):
         service = EvilTwinService()
         interface = ipaddress.IPv4Interface("192.168.50.2/24")
         with mock.patch(
-            "dragonfly.services.evil_twin_service.find_upstream",
+            "dragonfly.services.evil_twin_service.get_upstream_info_for_iface",
             return_value=None,
         ), mock.patch(
             "dragonfly.services.evil_twin_service.get_interface_ipv4",

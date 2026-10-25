@@ -239,11 +239,14 @@ Además del portal cautivo, la vista de Raspberry Pi incorpora **Evil Twin + Int
 
 Flujo:
 
-1. Se detecta la salida a Internet (`wlan0`, `wlan1`, `eth0`...) y se elige una radio AP distinta.
-2. El operador selecciona el modo de deauth: sin deauth, single o dual.
-3. El SSID se puede escribir con el teclado virtual o clonar de una red escaneada.
-4. Se elige banda/canal si la radio AP soporta 5 GHz.
-5. Opcionalmente se captura el tráfico del AP en `traffic.pcap` (requiere `tcpdump`).
+1. Se detectan las radios que pueden ser AP y las interfaces con salida a Internet (`wlan0`, `wlan1`, `eth0`...).
+2. El operador elige primero la radio AP y después la interfaz upstream. Los roles se pueden intercambiar entre las dos radios; no se asignan de forma fija.
+3. El operador selecciona el modo de deauth: sin deauth, single o dual.
+4. El SSID se puede escribir con el teclado virtual o clonar de una red escaneada.
+5. Se elige banda/canal si la radio AP soporta 5 GHz.
+6. Opcionalmente se captura el tráfico del AP en `traffic.pcap` (requiere `tcpdump`).
+
+Si se elige como AP la interfaz que transporta la sesión SSH, la aplicación avisa y permite continuar; el acceso remoto por esa interfaz se perderá mientras el AP esté activo.
 
 La sesión se guarda en `Resultados_EvilTwin/EvilTwin-NAT-{timestamp}/` con `session.json`, `README.txt`, logs de hostapd/dnsmasq y, si se activó, `traffic.pcap`. El AP es abierto y los clientes navegan a través de la Pi; HTTPS viaja cifrado y no se descifra.
 

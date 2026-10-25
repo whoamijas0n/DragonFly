@@ -17,12 +17,13 @@ from tkinter import ttk
 from dragonfly.ui.raspi.views.base_view import BaseView
 from dragonfly.ui.raspi.widgets import ScrollableFrame, TecladoCompleto
 from dragonfly.config import BASE_DIR_WIFI, BASE_DIR_EVIL, BASE_DIR_CLIENTS, BASE_DIR_WIFI_AUDIT
-from dragonfly.core.routing import get_primary_upstream_iface
 from dragonfly.core.wifi_interfaces import (
+    build_internet_candidate,
     get_deauth_interfaces,
     get_evil_twin_ap_interfaces,
-    get_internet_ap_candidates,
+    get_internet_ap_interfaces,
     get_internet_scan_interface,
+    get_internet_upstream_options,
     get_monitor_interfaces,
 )
 from dragonfly.services.wifi_audit_service import (
@@ -1233,33 +1234,13 @@ class WiFiView(BaseView):
     # 3b. EVIL TWIN + INTERNET (NAT)
     # =========================================================================
     @staticmethod
-    def _internet_band_text(candidate):
-        bands = candidate.get("bands") or {}
+    def _internet_band_text(bands):
+        bands = bands or {}
         if bands.get("2.4") and bands.get("5"):
             return "2.4/5G"
         if bands.get("5"):
             return "5G"
         return "2.4G"
-
-    @staticmethod
-    def _internet_sorted_candidates(mode="none"):
-        candidates = get_internet_ap_candidates()
-        # No ofrecer como AP la radio que lleva la ruta principal: en la Pi
-        # suele ser wlan0 y también transporta SSH.
-        primary = get_primary_upstream_iface()
-        if primary:
-            candidates = [
-                c for c in candidates if c.get("ap_iface") != primary
-            ]
-        if mode == "single":
-            candidates = [c for c in candidates if c.get("single_deauth")]
-        elif mode == "dual":
-            candidates = [c for c in candidates if c.get("dual_deauth")]
-        return sorted(
-            candidates,
-            key=lambda c: (0 if (c.get("bands") or {}).get("5") else 1,
-                           c.get("ap_iface") or ""),
-        )
 
     def _flow_internet_start(self):
         self.clear_frame()
@@ -1270,8 +1251,8 @@ class WiFiView(BaseView):
         scroll = ScrollableFrame(self.main_frame, max_items=10)
         scroll.pack(fill='both', expand=True, padx=2, pady=2)
 
-        candidates = self._internet_sorted_candidates("none")
-        if not candidates:
+        interfaces = get_internet_ap_interfaces()
+        if not interfaces:
             ttk.Label(
                 scroll.scrollable_frame,
                 text=("No hay una radio AP libre con salida a Internet.\n"
@@ -1285,30 +1266,90 @@ class WiFiView(BaseView):
 
         ttk.Label(
             scroll.scrollable_frame,
-            text=("El AP será abierto. Los clientes navegarán por NAT.\n"
-                  "No se ofrece como AP la interfaz de la ruta principal (SSH)."),
+            text=("Elija la radio que emitirá el AP. Después podrá elegir\n"
+                  "la interfaz por la que saldrá Internet.\n"
+                  "Si usa como AP la interfaz de SSH, perderá el acceso remoto."),
             style='Gray.TLabel',
             justify='center',
             wraplength=290,
         ).pack(pady=(0, 4))
 
-        for candidate in candidates:
-            upstream = candidate.get("upstream") or {}
-            text = (f"AP: {candidate['ap_iface']} ({self._internet_band_text(candidate)})"
-                    f" | Internet: {upstream.get('iface', '?')}")
+        for option in interfaces:
+            ap_iface = option["ap_iface"]
             scroll.add_button(
-                text=text,
-                command=lambda c=candidate: self._flow_internet_select_mode(c),
+                text=(f"AP: {ap_iface} "
+                      f"({self._internet_band_text(option.get('bands'))})"),
+                command=lambda i=ap_iface: self._flow_internet_select_upstream(i),
                 style='Red.TButton',
                 width=30,
             )
 
         self.show_console(parent=scroll.scrollable_frame)
 
+    def _flow_internet_select_upstream(self, ap_iface):
+        self.wifi_state["inet_ap_iface"] = ap_iface
+        self.clear_frame()
+        self.add_back_button(self._flow_internet_start)
+        ttk.Label(self.main_frame, text="INTERNET (UPSTREAM)",
+                  style='Title.TLabel').pack(pady=2)
+
+        scroll = ScrollableFrame(self.main_frame, max_items=10)
+        scroll.pack(fill='both', expand=True, padx=2, pady=2)
+
+        upstreams = get_internet_upstream_options(ap_iface)
+        if not upstreams:
+            ttk.Label(
+                scroll.scrollable_frame,
+                text=("No hay una interfaz con salida a Internet para este AP.\n"
+                      "Conecte el upstream o elija otra radio para el AP."),
+                style='Mono.TLabel',
+                justify='center',
+                wraplength=290,
+            ).pack(pady=10)
+            self.show_console(parent=scroll.scrollable_frame)
+            return
+
+        ttk.Label(
+            scroll.scrollable_frame,
+            text=f"AP seleccionado: {ap_iface}",
+            style='Gray.TLabel',
+            justify='center',
+            wraplength=290,
+        ).pack(pady=(0, 4))
+
+        for upstream in upstreams:
+            iface = upstream.get("iface", "?")
+            ip = upstream.get("ip", "?")
+            scroll.add_button(
+                text=f"Internet: {iface} ({ip})",
+                command=lambda u=upstream: self._flow_internet_select_roles(
+                    ap_iface, u
+                ),
+                style='Red.TButton',
+                width=30,
+            )
+
+        self.show_console(parent=scroll.scrollable_frame)
+
+    def _flow_internet_select_roles(self, ap_iface, upstream):
+        candidate = build_internet_candidate(ap_iface, upstream)
+        if not candidate:
+            self._flow_worker_error(
+                "COMBINACIÓN INVÁLIDA",
+                "El AP y el upstream no pueden ser la misma interfaz ni "
+                "compartir radio.",
+                self._flow_internet_start,
+            )
+            return
+        self.wifi_state["inet_candidate"] = candidate
+        self._flow_internet_select_mode(candidate)
+
     def _flow_internet_select_mode(self, candidate):
         self.wifi_state["inet_candidate"] = candidate
         self.clear_frame()
-        self.add_back_button(self._flow_internet_start)
+        self.add_back_button(
+            lambda: self._flow_internet_select_upstream(candidate["ap_iface"])
+        )
         ttk.Label(self.main_frame, text="MODO DEAUTH",
                   style='Title.TLabel').pack(pady=2)
 

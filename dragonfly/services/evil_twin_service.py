@@ -28,6 +28,7 @@ from dragonfly.core.routing import (
     get_dns_servers,
     get_interface_ipv4,
     get_primary_upstream_iface,
+    get_upstream_info_for_iface,
 )
 from dragonfly.core.session import SessionManager
 from dragonfly.core.subprocess_utils import safe_popen, safe_run
@@ -429,14 +430,21 @@ class EvilTwinService:
                     raise RuntimeError(f"Canal WiFi inválido: {channel}")
                 target["ch"] = channel
 
-                # Nunca se usa como AP la interfaz que sostiene la ruta
-                # principal: en la Raspberry Pi suele ser wlan0, que también
-                # transporta SSH. Si se libera, se pierde el acceso remoto.
+                # En el arranque automático no se usa como AP la interfaz que
+                # sostiene la ruta principal (normalmente wlan0/SSH). Si el
+                # operador eligió explícitamente el rol, se respeta y solo se
+                # avisa del riesgo.
                 primary_upstream = get_primary_upstream_iface()
                 if primary_upstream and primary_upstream == ap_iface:
-                    raise RuntimeError(
-                        f"{ap_iface} es la salida principal a Internet. "
-                        "Elija otra radio para el AP para no cortar SSH."
+                    if not upstream_iface:
+                        raise RuntimeError(
+                            f"{ap_iface} es la salida principal a Internet. "
+                            "Elija otra radio para el AP para no cortar SSH."
+                        )
+                    log(
+                        f"[!] {ap_iface} es la salida principal/SSH y se usará "
+                        "como AP por selección manual. El acceso remoto por esa "
+                        "interfaz se perderá."
                     )
 
                 upstream = self._resolve_upstream(ap_iface, upstream_iface)
@@ -577,14 +585,14 @@ class EvilTwinService:
         elif requested:
             requested_iface = str(requested)
 
-        # La ruta por defecto actual manda: si el upstream elegido en la UI
-        # cambió entre la detección y el arranque, es mejor usar la salida
-        # vigente que dejar el NAT apuntando a una interfaz sin ruta.
-        route = find_upstream(ap_iface=ap_iface)
-        if route:
-            return route
-
-        if requested_iface and requested_iface != ap_iface:
+        # Si el operador eligió una interfaz concreta, se respeta. La ruta de
+        # menor métrica solo se usa en el arranque automático (sin selección).
+        if requested_iface:
+            if requested_iface == ap_iface:
+                return None
+            route = get_upstream_info_for_iface(requested_iface)
+            if route:
+                return route
             interface = get_interface_ipv4(requested_iface)
             if interface is not None:
                 return {
@@ -598,7 +606,9 @@ class EvilTwinService:
                     "raw": "",
                     "dns": get_dns_servers(requested_iface),
                 }
-        return None
+            return None
+
+        return find_upstream(ap_iface=ap_iface)
 
     def stop_evil_twin(self):
         """Envía la señal de parada al ataque Evil Twin."""

@@ -186,6 +186,36 @@ def find_upstream(ap_iface: str | None = None, exclude_ifaces=None) -> dict | No
     return None
 
 
+def get_upstream_info_for_iface(iface: str) -> dict | None:
+    """
+    Retorna la ruta por defecto, IP y red de una interfaz concreta.
+
+    Se usa cuando el operador elige manualmente qué interfaz debe ser el
+    upstream, en lugar de aceptar la ruta de menor métrica. Si la interfaz no
+    tiene una ruta por defecto o no tiene IPv4, retorna ``None``.
+    """
+    if not iface:
+        return None
+    routes = [
+        route for route in get_default_routes()
+        if route.get("iface") == iface
+    ]
+    if not routes:
+        return None
+    route = sorted(
+        routes, key=lambda item: (item.get("metric", 0), item.get("raw") or "")
+    )[0]
+    interface = get_interface_ipv4(iface)
+    if interface is None:
+        return None
+    return {
+        **route,
+        "ip": str(interface.ip),
+        "cidr": str(interface),
+        "network": str(interface.network),
+    }
+
+
 def choose_gateway(upstream_iface: str | None = None) -> dict:
     """
     Elige una subred privada para el AP que no choque con el upstream.

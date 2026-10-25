@@ -65,6 +65,43 @@ class PrimaryUpstreamTest(unittest.TestCase):
             self.assertIsNone(routing.get_primary_upstream_iface())
 
 
+class UpstreamForInterfaceTest(unittest.TestCase):
+    def test_returns_requested_interface_route(self):
+        routes = [
+            {
+                "gateway": "192.168.1.1",
+                "iface": "wlan0",
+                "metric": 600,
+                "src": "192.168.1.222",
+                "raw": "default via 192.168.1.1 dev wlan0 metric 600",
+            },
+            {
+                "gateway": "192.168.1.1",
+                "iface": "wlan1",
+                "metric": 601,
+                "src": "192.168.1.48",
+                "raw": "default via 192.168.1.1 dev wlan1 metric 601",
+            },
+        ]
+        with mock.patch.object(
+            routing, "get_default_routes", return_value=routes
+        ), mock.patch.object(
+            routing, "get_interface_ipv4",
+            return_value=routing.ipaddress.IPv4Interface("192.168.1.48/24"),
+        ):
+            info = routing.get_upstream_info_for_iface("wlan1")
+        self.assertEqual(info["iface"], "wlan1")
+        self.assertEqual(info["ip"], "192.168.1.48")
+        self.assertEqual(info["network"], "192.168.1.0/24")
+        self.assertEqual(info["metric"], 601)
+
+    def test_returns_none_without_default_route(self):
+        with mock.patch.object(
+            routing, "get_default_routes", return_value=[]
+        ):
+            self.assertIsNone(routing.get_upstream_info_for_iface("wlan1"))
+
+
 class DnsSelectionTest(unittest.TestCase):
     def test_deduplicates_and_falls_back(self):
         with mock.patch.object(
