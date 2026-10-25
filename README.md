@@ -129,6 +129,7 @@ Módulo central de auditoría inalámbrica. Agrupa seis flujos de ataque/anális
 - **Activar Monitor**: pone la interfaz seleccionada en modo monitor usando `airmon-ng`, terminando procesos conflictivos antes.
 - **Captura Handshake**: escanea redes disponibles durante 15 segundos, permite seleccionar el objetivo y un cliente (o broadcast), y lanza `airodump-ng` para captura simultánea con `aireplay-ng -0` para forzar la reautenticación. Los archivos `.cap` se guardan en `Resultados_Handshake/Auditoria-{timestamp}/`.
 - **Ataque Evil Twin**: flujo completo de AP falso con portal cautivo (ver sección dedicada más adelante).
+- **Evil Twin + Internet**: AP abierto con NAT, DHCP/DNS reales y clientes navegando por la Raspberry Pi; SSID personalizado o clonado, deauth opcional según hardware y captura pcap opcional (ver sección dedicada más adelante).
 - **Desautenticación**: envía paquetes deauth dirigidos a un cliente o en broadcast contra un BSSID objetivo.
 - **Explorar Handshakes / Explorar Evil Twin / Explorar Auditorías WiFi**: navegador de archivos integrado para revisar capturas, credenciales y reportes de reconocimiento de sesiones anteriores.
 
@@ -229,6 +230,27 @@ Cada portal envía también los campos ocultos `isp`, `router_ip`, `router_model
 - El formulario de captura debe enviar los datos mediante `method="GET"` o `method="POST"` con `action="/"` o sin atributo de acción. El servidor de captura registra ambos métodos.
 - Los archivos estáticos (CSS, imágenes, JS) deben referenciarse con rutas relativas. El servidor copia todo el contenido del directorio del portal a `/tmp/` antes de servirlo.
 - El portal debe ser autónomo: no puede depender de recursos externos (CDNs, APIs) ya que el dispositivo víctima no tendrá acceso a internet durante el ataque.
+
+---
+
+### Evil Twin + Internet (NAT)
+
+Además del portal cautivo, la vista de Raspberry Pi incorpora **Evil Twin + Internet**. En este modo el AP falso no redirige a un portal: los clientes reciben DHCP y DNS reales y su tráfico IPv4 sale a Internet mediante NAT usando la interfaz upstream de la Raspberry Pi.
+
+Flujo:
+
+1. Se detectan las radios que pueden ser AP y las interfaces con salida a Internet (`wlan0`, `wlan1`, `eth0`...).
+2. El operador elige primero la radio AP y después la interfaz upstream. Los roles se pueden intercambiar entre las dos radios; no se asignan de forma fija.
+3. El operador selecciona el modo de deauth: sin deauth, single o dual.
+4. El SSID se puede escribir con el teclado virtual o clonar de una red escaneada.
+5. Se elige banda/canal si la radio AP soporta 5 GHz.
+6. Opcionalmente se captura el tráfico del AP en `traffic.pcap` (requiere `tcpdump`).
+
+Si se elige como AP la interfaz que transporta la sesión SSH, la aplicación avisa y permite continuar; el acceso remoto por esa interfaz se perderá mientras el AP esté activo.
+
+La sesión se guarda en `Resultados_EvilTwin/EvilTwin-NAT-{timestamp}/` con `session.json`, `README.txt`, logs de hostapd/dnsmasq y, si se activó, `traffic.pcap`. El AP es abierto y los clientes navegan a través de la Pi; HTTPS viaja cifrado y no se descifra.
+
+**Limitación de hardware:** el adaptador USB del equipo de referencia puede hacer AP o monitor, pero no ambos a la vez. La radio onboard tampoco emite un AP real en una vif secundaria mientras mantiene la conexión STA. Por eso, con Internet por WiFi solo está disponible el modo **sin deauth**. Para habilitar single se necesita una tercera radio (por ejemplo, Ethernet/USB como upstream, AP en `wlan0` y monitor en `wlan1`); para dual se necesitan dos radios monitor independientes. La interfaz deshabilita automáticamente las opciones que el hardware no puede cumplir.
 
 ---
 
@@ -413,7 +435,7 @@ Actualiza los repositorios APT e instala todos los paquetes necesarios para que 
 ```
 python3  python3-tk  python3-serial  python3-pil  python3-pil.imagetk
 python3-netifaces  python3-aioquic
-nmap  macchanger  aircrack-ng  hostapd  dnsmasq  iptables
+nmap  macchanger  aircrack-ng  hostapd  dnsmasq  iptables  tcpdump
 network-manager  bluez  rfkill
 git  openssl
 ```
@@ -635,7 +657,7 @@ El script lee `/etc/os-release` e invoca el gestor de paquetes correspondiente. 
 **Paquetes instalados (nombres en Debian/Ubuntu/Kali):**
 ```
 python3  python3-pip  python3-tk  python3-venv
-nmap  macchanger  aircrack-ng  hostapd  dnsmasq
+nmap  macchanger  aircrack-ng  hostapd  dnsmasq  tcpdump
 net-tools  iptables  bluez  x11-xserver-utils
 ```
 
