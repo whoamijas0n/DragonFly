@@ -15,11 +15,14 @@ import gc
 import tkinter as tk
 from tkinter import ttk
 from dragonfly.ui.raspi.views.base_view import BaseView
-from dragonfly.ui.raspi.widgets import ScrollableFrame
+from dragonfly.ui.raspi.widgets import ScrollableFrame, TecladoCompleto
 from dragonfly.config import BASE_DIR_WIFI, BASE_DIR_EVIL, BASE_DIR_CLIENTS, BASE_DIR_WIFI_AUDIT
+from dragonfly.core.routing import get_primary_upstream_iface
 from dragonfly.core.wifi_interfaces import (
     get_deauth_interfaces,
     get_evil_twin_ap_interfaces,
+    get_internet_ap_candidates,
+    get_internet_scan_interface,
     get_monitor_interfaces,
 )
 from dragonfly.services.wifi_audit_service import (
@@ -71,6 +74,7 @@ class WiFiView(BaseView):
             ("Clientes Conectados", self._flow_client_list),
             ("Captura Handshake", self._flow_handshake_start),
             ("Ataque Evil Twin", self._flow_evil_twin_start),
+            ("Evil Twin + Internet", self._flow_internet_start),
             ("Ataque Deauth", self._flow_deauth_menu),
             ("Explorar Handshakes", lambda: self.app.views['explorer'].show_sessions(BASE_DIR_WIFI, "Handshakes", self.render)),
             ("Explorar Evil Twin", lambda: self.app.views['explorer'].show_sessions(BASE_DIR_EVIL, "Evil Twin", self.render)),
@@ -1221,6 +1225,596 @@ class WiFiView(BaseView):
         def stopper():
             self.services.evil_twin.stop_evil_twin()
             self.services.evil_twin.wait_until_stopped(timeout=25)
+            self.run_on_ui(self.render)
+
+        threading.Thread(target=stopper, daemon=True).start()
+
+    # =========================================================================
+    # 3b. EVIL TWIN + INTERNET (NAT)
+    # =========================================================================
+    @staticmethod
+    def _internet_band_text(candidate):
+        bands = candidate.get("bands") or {}
+        if bands.get("2.4") and bands.get("5"):
+            return "2.4/5G"
+        if bands.get("5"):
+            return "5G"
+        return "2.4G"
+
+    @staticmethod
+    def _internet_sorted_candidates(mode="none"):
+        candidates = get_internet_ap_candidates()
+        # No ofrecer como AP la radio que lleva la ruta principal: en la Pi
+        # suele ser wlan0 y también transporta SSH.
+        primary = get_primary_upstream_iface()
+        if primary:
+            candidates = [
+                c for c in candidates if c.get("ap_iface") != primary
+            ]
+        if mode == "single":
+            candidates = [c for c in candidates if c.get("single_deauth")]
+        elif mode == "dual":
+            candidates = [c for c in candidates if c.get("dual_deauth")]
+        return sorted(
+            candidates,
+            key=lambda c: (0 if (c.get("bands") or {}).get("5") else 1,
+                           c.get("ap_iface") or ""),
+        )
+
+    def _flow_internet_start(self):
+        self.clear_frame()
+        self.add_back_button(self.render)
+        ttk.Label(self.main_frame, text="EVIL TWIN + INTERNET",
+                  style='Title.TLabel').pack(pady=2)
+
+        scroll = ScrollableFrame(self.main_frame, max_items=10)
+        scroll.pack(fill='both', expand=True, padx=2, pady=2)
+
+        candidates = self._internet_sorted_candidates("none")
+        if not candidates:
+            ttk.Label(
+                scroll.scrollable_frame,
+                text=("No hay una radio AP libre con salida a Internet.\n"
+                      "Conecte el upstream por WiFi/Ethernet o añada otro adaptador."),
+                style='Mono.TLabel',
+                justify='center',
+                wraplength=290,
+            ).pack(pady=10)
+            self.show_console(parent=scroll.scrollable_frame)
+            return
+
+        ttk.Label(
+            scroll.scrollable_frame,
+            text=("El AP será abierto. Los clientes navegarán por NAT.\n"
+                  "No se ofrece como AP la interfaz de la ruta principal (SSH)."),
+            style='Gray.TLabel',
+            justify='center',
+            wraplength=290,
+        ).pack(pady=(0, 4))
+
+        for candidate in candidates:
+            upstream = candidate.get("upstream") or {}
+            text = (f"AP: {candidate['ap_iface']} ({self._internet_band_text(candidate)})"
+                    f" | Internet: {upstream.get('iface', '?')}")
+            scroll.add_button(
+                text=text,
+                command=lambda c=candidate: self._flow_internet_select_mode(c),
+                style='Red.TButton',
+                width=30,
+            )
+
+        self.show_console(parent=scroll.scrollable_frame)
+
+    def _flow_internet_select_mode(self, candidate):
+        self.wifi_state["inet_candidate"] = candidate
+        self.clear_frame()
+        self.add_back_button(self._flow_internet_start)
+        ttk.Label(self.main_frame, text="MODO DEAUTH",
+                  style='Title.TLabel').pack(pady=2)
+
+        scroll = ScrollableFrame(self.main_frame, max_items=10)
+        scroll.pack(fill='both', expand=True, padx=2, pady=2)
+
+        upstream = candidate.get("upstream") or {}
+        ttk.Label(
+            scroll.scrollable_frame,
+            text=f"AP {candidate['ap_iface']} | Internet {upstream.get('iface', '?')}",
+            style='Gray.TLabel',
+            justify='center',
+            wraplength=290,
+        ).pack(pady=(0, 4))
+
+        scroll.add_button(
+            text="Sin deauth (recomendado)",
+            command=lambda: self._flow_internet_ssid_mode(candidate, "none", []),
+            style='Red.TButton',
+            width=30,
+        )
+
+        monitors = candidate.get("monitor_ifaces") or []
+        if monitors:
+            scroll.add_button(
+                text=f"Deauth single ({monitors[0]})",
+                command=lambda: self._flow_internet_ssid_mode(
+                    candidate, "single", monitors[:1]
+                ),
+                style='Danger.TButton',
+                width=30,
+            )
+        else:
+            ttk.Label(
+                scroll.scrollable_frame,
+                text="Deauth single: requiere una radio monitor libre.",
+                style='Gray.TLabel',
+                wraplength=290,
+            ).pack(pady=2)
+
+        if len(monitors) >= 2:
+            scroll.add_button(
+                text="Deauth dual (2 monitores)",
+                command=lambda: self._flow_internet_ssid_mode(
+                    candidate, "dual", monitors[:2]
+                ),
+                style='Danger.TButton',
+                width=30,
+            )
+        else:
+            ttk.Label(
+                scroll.scrollable_frame,
+                text="Deauth dual: requiere 2 radios monitor libres.",
+                style='Gray.TLabel',
+                wraplength=290,
+            ).pack(pady=2)
+
+        ttk.Label(
+            scroll.scrollable_frame,
+            text="Con deauth hay que clonar el SSID de la red objetivo.",
+            style='Gray.TLabel',
+            justify='center',
+            wraplength=290,
+        ).pack(pady=(4, 0))
+        self.show_console(parent=scroll.scrollable_frame)
+
+    def _flow_internet_ssid_mode(self, candidate, mode, monitors):
+        self.wifi_state["inet_mode"] = mode
+        self.wifi_state["inet_monitors"] = list(monitors)
+        self.clear_frame()
+        self.add_back_button(lambda: self._flow_internet_select_mode(candidate))
+        ttk.Label(self.main_frame, text="SSID DEL AP",
+                  style='Title.TLabel').pack(pady=2)
+
+        scroll = ScrollableFrame(self.main_frame, max_items=10)
+        scroll.pack(fill='both', expand=True, padx=2, pady=2)
+
+        if mode == "none":
+            scroll.add_button(
+                text="Nombre personalizado",
+                command=lambda: self._flow_internet_custom_ssid(
+                    candidate, mode, monitors
+                ),
+                style='Red.TButton',
+                width=30,
+            )
+            scroll.add_button(
+                text="Clonar red escaneada",
+                command=lambda: self._flow_internet_scan(
+                    candidate, mode, monitors
+                ),
+                style='Danger.TButton',
+                width=30,
+            )
+        else:
+            ttk.Label(
+                scroll.scrollable_frame,
+                text=("El deauth solo tiene sentido si el AP clona la red\n"
+                      "cuyos clientes se van a expulsar."),
+                style='Mono.TLabel',
+                justify='center',
+                wraplength=290,
+            ).pack(pady=4)
+            scroll.add_button(
+                text="Clonar red objetivo",
+                command=lambda: self._flow_internet_scan(
+                    candidate, mode, monitors
+                ),
+                style='Danger.TButton',
+                width=30,
+            )
+
+        self.show_console(parent=scroll.scrollable_frame)
+
+    def _flow_internet_cancel_scan(self, candidate, mode, monitors):
+        """Vuelve a la selección de SSID restaurando la radio de escaneo."""
+        mon = self.wifi_state.pop("inet_scan_mon", None)
+        temporary = bool(self.wifi_state.pop("inet_scan_temp", False))
+        if not mon or not temporary:
+            self._flow_internet_ssid_mode(candidate, mode, monitors)
+            return
+
+        self.write_console(f"[*] Restaurando radio de escaneo {mon}...")
+
+        def worker():
+            try:
+                self.services.wifi.disable_monitor_mode(mon)
+            except Exception as exc:
+                self.write_console(f"[!] No se pudo restaurar {mon}: {exc}")
+            self.run_on_ui(
+                lambda: self._flow_internet_ssid_mode(candidate, mode, monitors)
+            )
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _flow_internet_custom_ssid(self, candidate, mode, monitors):
+        variable = tk.StringVar(value="")
+        teclado = TecladoCompleto(
+            self.app, variable, titulo="SSID personalizado"
+        )
+        self.app.wait_window(teclado)
+
+        ssid = (variable.get() or "").strip()
+        if not ssid or ssid == "CANCELADO":
+            return
+        try:
+            ssid = self.services.evil_twin.validate_ssid(ssid)
+        except ValueError as exc:
+            self._flow_worker_error(
+                "SSID INVÁLIDO",
+                exc,
+                lambda: self._flow_internet_ssid_mode(candidate, mode, monitors),
+            )
+            return
+
+        self._flow_internet_select_band(candidate, mode, monitors, ssid)
+
+    def _flow_internet_select_band(self, candidate, mode, monitors, ssid,
+                                   deauth_targets=None):
+        bands = candidate.get("bands") or {}
+        options = [("2.4 GHz (CH 6)", 6)]
+        if bands.get("5"):
+            options.append(("5 GHz (CH 36)", 36))
+
+        if len(options) == 1:
+            self._flow_internet_options(
+                candidate, mode, monitors,
+                {"essid": ssid, "ch": options[0][1], "banda": "2.4"},
+                deauth_targets=deauth_targets,
+            )
+            return
+
+        self.clear_frame()
+        self.add_back_button(
+            lambda: self._flow_internet_cancel_scan(candidate, mode, monitors)
+        )
+        ttk.Label(self.main_frame, text="BANDA DEL AP",
+                  style='Title.TLabel').pack(pady=2)
+
+        scroll = ScrollableFrame(self.main_frame, max_items=10)
+        scroll.pack(fill='both', expand=True, padx=2, pady=2)
+        ttk.Label(
+            scroll.scrollable_frame,
+            text=f"SSID: {ssid}",
+            style='Gray.TLabel',
+            wraplength=290,
+        ).pack(pady=(0, 4))
+        for label, channel in options:
+            scroll.add_button(
+                text=label,
+                command=lambda ch=channel: self._flow_internet_options(
+                    candidate, mode, monitors,
+                    {"essid": ssid, "ch": ch,
+                     "banda": "5" if ch > 14 else "2.4"},
+                    deauth_targets=deauth_targets,
+                ),
+                style='Red.TButton',
+                width=30,
+            )
+        self.show_console(parent=scroll.scrollable_frame)
+
+    def _flow_internet_scan(self, candidate, mode, monitors,
+                            deauth_targets=None, second_target=False):
+        upstream = candidate.get("upstream") or {}
+        scan_iface, temporary = get_internet_scan_interface(
+            candidate["ap_iface"], monitors, upstream.get("iface")
+        )
+        if not scan_iface:
+            self._flow_worker_error(
+                "SIN RADIO MONITOR",
+                "No hay una radio monitor libre para escanear. "
+                "Use un SSID personalizado o añada otro adaptador.",
+                lambda: self._flow_internet_ssid_mode(candidate, mode, monitors),
+            )
+            return
+
+        self.clear_frame()
+        self.add_back_button(
+            lambda: self._flow_internet_cancel_scan(candidate, mode, monitors)
+        )
+        title = "SEGUNDA RED (DEAUTH)" if second_target else "ESCANEANDO REDES..."
+        ttk.Label(self.main_frame, text=title, style='Title.TLabel').pack(pady=2)
+        self.show_console()
+        self.write_console(f"[*] Escaneando con {scan_iface} (15s)...")
+
+        def worker():
+            try:
+                mon = self.services.wifi.enable_monitor_mode(scan_iface)
+                self.wifi_state["inet_scan_mon"] = mon
+                self.wifi_state["inet_scan_temp"] = bool(temporary)
+                redes = self.services.wifi.scan_networks(mon, duration=15)
+                self.run_on_ui(lambda: self._flow_internet_show_networks(
+                    redes, candidate, mode, monitors,
+                    temporary, deauth_targets, second_target,
+                ))
+            except Exception as exc:
+                self._flow_worker_error(
+                    "ERROR DE ESCANEO",
+                    exc,
+                    lambda: self._flow_internet_ssid_mode(candidate, mode, monitors),
+                )
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _flow_internet_show_networks(self, redes, candidate, mode, monitors,
+                                     temporary, deauth_targets=None,
+                                     second_target=False):
+        self.clear_frame()
+        self.add_back_button(
+            lambda: self._flow_internet_cancel_scan(candidate, mode, monitors)
+        )
+        title = "SEGUNDA RED (DEAUTH)" if second_target else "RED A CLONAR"
+        ttk.Label(self.main_frame, text=title, style='Title.TLabel').pack(pady=2)
+
+        validas = [red for red in (redes or []) if str(red.get("essid") or "").strip()]
+        if not validas:
+            ttk.Label(
+                self.main_frame,
+                text="No se detectaron redes con SSID visible.",
+                style='Dark.TLabel',
+            ).pack(pady=6)
+            self.show_console()
+            return
+
+        scroll = ScrollableFrame(self.main_frame, max_items=50)
+        scroll.pack(fill='both', expand=True, padx=5, pady=2)
+        for red in validas:
+            essid = str(red.get("essid") or "").strip()
+            channel = red.get("ch", "?")
+            scroll.add_button(
+                text=f"{essid[:19]} (CH:{channel})",
+                command=lambda r=red: self._flow_internet_target_selected(
+                    r, candidate, mode, monitors,
+                    temporary, deauth_targets, second_target,
+                ),
+                style='Gray.TButton',
+                width=30,
+            )
+        self.show_console(parent=scroll.scrollable_frame)
+        gc.collect()
+
+    def _flow_internet_target_selected(self, red, candidate, mode, monitors,
+                                       temporary, deauth_targets=None,
+                                       second_target=False):
+        original = dict(red)
+        try:
+            essid = self.services.evil_twin.validate_ssid(original.get("essid"))
+        except ValueError as exc:
+            self._flow_worker_error(
+                "SSID INVÁLIDO", exc,
+                lambda: self._flow_internet_ssid_mode(candidate, mode, monitors),
+            )
+            return
+
+        if mode == "dual" and not second_target:
+            self.wifi_state["inet_dual_first"] = original
+            self._flow_internet_scan(
+                candidate, mode, monitors,
+                deauth_targets=[original], second_target=True,
+            )
+            return
+
+        if mode == "dual":
+            first = self.wifi_state.get("inet_dual_first") or original
+            try:
+                first_essid = self.services.evil_twin.validate_ssid(
+                    first.get("essid")
+                )
+            except ValueError as exc:
+                self._flow_worker_error(
+                    "SSID INVÁLIDO", exc,
+                    lambda: self._flow_internet_ssid_mode(candidate, mode, monitors),
+                )
+                return
+            ap_source = dict(first)
+            ap_source["essid"] = first_essid
+            targets = [dict(first), dict(original)]
+        elif mode == "single":
+            ap_source = dict(original)
+            ap_source["essid"] = essid
+            targets = [dict(original)]
+        else:
+            ap_source = dict(original)
+            ap_source["essid"] = essid
+            targets = []
+
+        ap_target = dict(ap_source)
+        bands = candidate.get("bands") or {}
+        channel = ap_source.get("ch") or 6
+        try:
+            channel = int(channel)
+        except (TypeError, ValueError):
+            channel = 6
+        if channel > 14 and not bands.get("5"):
+            self.write_console(
+                f"[!] {candidate['ap_iface']} no soporta 5 GHz; el AP usará CH 6."
+            )
+            channel = 6
+        elif 52 <= channel <= 144:
+            self.write_console(
+                "[!] Canal DFS clonado; el AP usará CH 36 para evitar CAC."
+            )
+            channel = 36
+        ap_target["ch"] = channel
+        ap_target["banda"] = "5" if channel > 14 else "2.4"
+
+        # Si el escaneo usó una radio temporal distinta del AP, devolverla a NM.
+        scan_mon = self.wifi_state.get("inet_scan_mon")
+        if temporary and scan_mon and scan_mon != candidate["ap_iface"]:
+            def restore_scan():
+                try:
+                    self.services.wifi.disable_monitor_mode(scan_mon)
+                except Exception as exc:
+                    self.write_console(f"[!] No se pudo restaurar {scan_mon}: {exc}")
+                self.wifi_state["inet_scan_mon"] = None
+                self.wifi_state["inet_scan_temp"] = False
+                self.run_on_ui(lambda: self._flow_internet_options(
+                    candidate, mode, monitors, ap_target,
+                    deauth_targets=targets,
+                ))
+            self.write_console(f"[*] Restaurando radio de escaneo {scan_mon}...")
+            threading.Thread(target=restore_scan, daemon=True).start()
+            return
+
+        self._flow_internet_options(
+            candidate, mode, monitors, ap_target, deauth_targets=targets
+        )
+
+    def _flow_internet_options(self, candidate, mode, monitors, target,
+                               deauth_targets=None):
+        self.wifi_state["inet_target"] = target
+        self.wifi_state["inet_deauth_targets"] = list(deauth_targets or [])
+        self.clear_frame()
+        self.add_back_button(
+            lambda: self._flow_internet_cancel_scan(candidate, mode, monitors)
+        )
+        ttk.Label(self.main_frame, text="CONFIRMAR EVIL TWIN",
+                  style='Title.TLabel').pack(pady=2)
+
+        scroll = ScrollableFrame(self.main_frame, max_items=10)
+        scroll.pack(fill='both', expand=True, padx=2, pady=2)
+
+        upstream = candidate.get("upstream") or {}
+        deauth_text = {"none": "sin deauth", "single": "single",
+                       "dual": "dual"}.get(mode, mode)
+        ttk.Label(
+            scroll.scrollable_frame,
+            text=(f"SSID: {target.get('essid')}\n"
+                  f"AP: {candidate['ap_iface']}  CH: {target.get('ch')}\n"
+                  f"Internet: {upstream.get('iface', '?')}\n"
+                  f"Deauth: {deauth_text}"),
+            style='Mono.TLabel',
+            justify='left',
+            wraplength=292,
+        ).pack(anchor='w', padx=4, pady=3)
+
+        capture = bool(self.wifi_state.get("inet_capture", False))
+        capture_available = self.services.evil_twin.capture_available()
+        if capture_available:
+            scroll.add_button(
+                text=f"Captura pcap: {'SÍ' if capture else 'NO'}",
+                command=lambda: self._flow_internet_toggle_capture(
+                    candidate, mode, monitors, target, deauth_targets
+                ),
+                style='Gray.TButton',
+                width=30,
+            )
+        else:
+            ttk.Label(
+                scroll.scrollable_frame,
+                text="Captura pcap: no disponible (instale tcpdump).",
+                style='Gray.TLabel',
+                wraplength=290,
+            ).pack(pady=2)
+
+        scroll.add_button(
+            text="INICIAR EVIL TWIN + INTERNET",
+            command=lambda: self._flow_internet_launch(
+                candidate, mode, monitors, target, deauth_targets, capture
+            ),
+            style='Danger.TButton',
+            width=30,
+        )
+        ttk.Label(
+            scroll.scrollable_frame,
+            text=("Los clientes navegan por NAT. HTTPS no se descifra;\n"
+                  "la captura pcap solo guarda tráfico cifrado."),
+            style='Gray.TLabel',
+            justify='center',
+            wraplength=290,
+        ).pack(pady=(4, 0))
+        self.show_console(parent=scroll.scrollable_frame)
+
+    def _flow_internet_toggle_capture(self, candidate, mode, monitors, target,
+                                      deauth_targets):
+        self.wifi_state["inet_capture"] = not bool(
+            self.wifi_state.get("inet_capture", False)
+        )
+        self._flow_internet_options(
+            candidate, mode, monitors, target, deauth_targets=deauth_targets
+        )
+
+    def _flow_internet_launch(self, candidate, mode, monitors, target,
+                              deauth_targets, capture):
+        self.clear_frame()
+        self.add_back_button(self.render)
+        ttk.Label(self.main_frame, text="EVIL TWIN + INTERNET",
+                  style='Title.TLabel').pack(pady=2)
+
+        scroll = ScrollableFrame(self.main_frame, max_items=10)
+        scroll.pack(fill='both', expand=True, padx=2, pady=2)
+        self.btn_detener_internet = scroll.add_button(
+            text="DETENER EVIL TWIN",
+            command=self._flow_internet_stop,
+            style='Danger.TButton',
+            width=30,
+        )
+        self.show_console(parent=scroll.scrollable_frame)
+
+        upstream = candidate.get("upstream") or {}
+        self.write_console(
+            f"[*] AP {candidate['ap_iface']} | Internet {upstream.get('iface', '?')} "
+            f"| SSID {target.get('essid')} | Deauth {mode}"
+        )
+
+        def worker():
+            actual_monitors = []
+            try:
+                for base in monitors:
+                    actual_monitors.append(
+                        self.services.wifi.enable_monitor_mode(base)
+                    )
+            except Exception as exc:
+                self._flow_worker_error(
+                    "ERROR DE MONITOR",
+                    exc,
+                    lambda: self._flow_internet_ssid_mode(candidate, mode, monitors),
+                )
+                return
+
+            mon1 = actual_monitors[0] if actual_monitors else None
+            mon2 = actual_monitors[1] if len(actual_monitors) > 1 else None
+            self.services.evil_twin.start_internet_ap(
+                ap_iface=candidate["ap_iface"],
+                red_target=target,
+                upstream_iface=upstream.get("iface"),
+                deauth_mode=mode,
+                mon_deauth=mon1,
+                mon_deauth2=mon2,
+                deauth_targets=deauth_targets,
+                capture=bool(capture),
+                on_output=self.write_console,
+            )
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _flow_internet_stop(self):
+        self.write_console("[*] Deteniendo Evil Twin + Internet...")
+        if (getattr(self, "btn_detener_internet", None)
+                and self.btn_detener_internet.winfo_exists()):
+            self.btn_detener_internet.config(style='Gray.TButton')
+            self.btn_detener_internet.state(['disabled'])
+
+        def stopper():
+            self.services.evil_twin.stop_evil_twin()
+            self.services.evil_twin.wait_until_stopped(timeout=30)
             self.run_on_ui(self.render)
 
         threading.Thread(target=stopper, daemon=True).start()
